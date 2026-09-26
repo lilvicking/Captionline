@@ -1,24 +1,42 @@
 import { useState } from "react";
-import { LogOut, Mail, User as UserIcon, X } from "lucide-react";
+import { CalendarClock, LogOut, Mail, RefreshCw, User as UserIcon, X } from "lucide-react";
 import { useAuth } from "./AuthContext";
 
 type AccountPanelProps = {
   onClose: () => void;
 };
 
-/** Formats "3.2 / 10 minutes used" for the usage line. */
+/** "3.2 / 10 minutes used" on Free, "250 / 500 minutes used" on a paid plan. */
 function usageSummary(used: number, allowance: number): string {
-  return `${used.toFixed(1)} / ${allowance.toFixed(1)} minutes used`;
+  const format = (value: number) =>
+    value >= 100 ? Math.round(value).toLocaleString() : value.toFixed(1);
+
+  return `${format(used)} / ${format(allowance)} minutes used`;
+}
+
+function formatResetDate(iso: string): string {
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 export function AccountPanel({ onClose }: AccountPanelProps) {
-  const { status, user, account, signIn, signUp, signOut } = useAuth();
+  const { status, user, account, refresh, signIn, signUp, signOut } = useAuth();
 
   const [mode, setMode] = useState<"in" | "up">("in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const isAuthenticated = status === "authenticated" && user !== null;
 
@@ -41,6 +59,12 @@ export function AccountPanel({ onClose }: AccountPanelProps) {
     }
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refresh();
+    setRefreshing(false);
+  };
+
   return (
     <div className="sheet" role="dialog" aria-label="Account">
       <div className="sheet__head">
@@ -57,11 +81,25 @@ export function AccountPanel({ onClose }: AccountPanelProps) {
           <p className="account__identity">
             <UserIcon size={16} aria-hidden="true" />
             <span className="account__email">{user.email}</span>
+            <button
+              className="account__refresh"
+              type="button"
+              onClick={() => void handleRefresh()}
+              disabled={refreshing}
+              aria-label="Refresh usage"
+              title="Refresh usage"
+            >
+              <RefreshCw size={14} className={refreshing ? "is-spinning" : ""} aria-hidden="true" />
+            </button>
           </p>
 
           {account ? (
             <div className="account__plan">
-              <p className="account__plan-name">{account.plan_label} plan</p>
+              <p className="account__plan-name">
+                {account.plan_label}
+                {account.billed_annually ? " · billed annually" : ""}
+              </p>
+
               <p className="account__usage">
                 {usageSummary(
                   account.processing_used_minutes,
@@ -92,18 +130,33 @@ export function AccountPanel({ onClose }: AccountPanelProps) {
                 />
               </div>
 
+              <p className="account__remaining">
+                {account.processing_remaining_minutes.toFixed(1)} minutes remaining
+              </p>
+
               <p className="account__hint">
-                {account.processing_remaining_minutes.toFixed(1)} minutes left this period ·
-                preview {account.preview_limit_seconds === null
-                  ? "unlimited"
-                  : `${account.preview_limit_seconds}s`}
+                <CalendarClock size={13} aria-hidden="true" />
+                Allowance resets {formatResetDate(account.usage_period_ends_at)}
+                {account.billed_annually ? " · billed annually" : ""}
+              </p>
+
+              <p className="account__hint">
+                Finished preview:{" "}
+                {account.has_full_preview
+                  ? "full video"
+                  : `first ${account.preview_limit_seconds ?? 30} seconds`}
+                {account.can_export ? " · export included" : ""}
               </p>
             </div>
           ) : (
             <p className="sheet__body">Usage details are unavailable right now.</p>
           )}
 
-          <button className="button button--ghost button--block" type="button" onClick={() => void signOut()}>
+          <button
+            className="button button--ghost button--block"
+            type="button"
+            onClick={() => void signOut()}
+          >
             <LogOut size={15} aria-hidden="true" />
             Log out
           </button>
@@ -178,7 +231,7 @@ export function AccountPanel({ onClose }: AccountPanelProps) {
           <p className="account__hint">
             {mode === "in"
               ? "New to Captionline? Switch to Sign up."
-              : "Accounts start on the Free plan: 10 minutes of processing per month."}
+              : "Free accounts get 10 processing minutes a month and a 30-second finished preview."}
           </p>
         </form>
       )}

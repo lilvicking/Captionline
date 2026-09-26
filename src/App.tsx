@@ -7,8 +7,10 @@ import { Pricing } from "./components/Pricing";
 import { ProcessingState, type TranscriptionJob } from "./components/ProcessingState";
 import { Editor } from "./components/editor/Editor";
 import { AccountPanel } from "./auth/AccountPanel";
+import { useAuth } from "./auth/AuthContext";
 import { createSampleCues } from "./data/sampleCaptions";
-import { API_BASE_URL, segmentsToCues, transcribeFile } from "./lib/api";
+import { TranscriptionError, failureReasonFor, segmentsToCues, transcribeFile } from "./lib/api";
+import { getStoredToken } from "./lib/auth";
 import type { CaptionCue } from "./types";
 
 type Stage = "landing" | "processing" | "editor";
@@ -36,6 +38,9 @@ export function App() {
   const [isAccountOpen, setIsAccountOpen] = useState(false);
 
   const objectUrlRef = useRef<string | null>(null);
+  const { status: authStatus, refresh: refreshAccount } = useAuth();
+
+  const isAuthenticated = authStatus === "authenticated";
 
   const releaseObjectUrl = useCallback(() => {
     if (objectUrlRef.current) {
@@ -77,7 +82,7 @@ export function App() {
       }
     }, 1200);
 
-    transcribeFile(pendingFile, controller.signal)
+    transcribeFile(pendingFile, getStoredToken(), controller.signal)
       .then((result) => {
         if (cancelled) {
           return;
@@ -106,6 +111,9 @@ export function App() {
           });
         }
 
+        // Processing time was just spent, so pull the fresh usage numbers.
+        void refreshAccount();
+
         openEditor();
       })
       .catch((error: unknown) => {
@@ -113,12 +121,15 @@ export function App() {
           return;
         }
 
+        const reason =
+          error instanceof TranscriptionError ? failureReasonFor(error.status) : "failed";
+
         const message =
           error instanceof Error ? error.message : "Transcription failed for an unknown reason.";
 
         setCues(createSampleCues());
         setMeta({ source: "sample", wordAligned: false, error: message });
-        setJob({ phase: "error", message: "Transcription unavailable", detail: message });
+        setJob({ phase: "error", message, detail: message, reason });
       })
       .finally(() => {
         window.clearTimeout(transcribingTimer);
@@ -129,7 +140,7 @@ export function App() {
       controller.abort();
       window.clearTimeout(transcribingTimer);
     };
-  }, [pendingFile, openEditor]);
+  }, [pendingFile, openEditor, refreshAccount]);
 
   const handleFile = useCallback(
     (file: File) => {
@@ -163,10 +174,22 @@ export function App() {
     document.getElementById("upload")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
+  const openAccount = useCallback(() => setIsAccountOpen(true), []);
+
+  const showPlans = useCallback(() => {
+    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   if (stage === "processing") {
     return (
       <div className="app">
-        <ProcessingState fileName={videoName} job={job} onContinue={openEditor} />
+        <ProcessingState
+          fileName={videoName}
+          job={job}
+          onContinue={openEditor}
+          onSignIn={openAccount}
+          onViewPlans={showPlans}
+        />
       </div>
     );
   }
@@ -188,11 +211,11 @@ export function App() {
 
   return (
     <div className="app">
-      <Nav onStartUpload={focusUploadZone} onOpenAccount={() => setIsAccountOpen(true)} />
+      <Nav onStartUpload={focusUploadZone} onOpenAccount={openAccount} />
 
       <main>
         <div id="upload">
-          <Hero onFile={handleFile} />
+          <Hero onFile={handleFile} isAuthenticated={isAuthenticated} onRequestSignIn={openAccount} />
         </div>
         <HowItWorks />
         <Pricing />
@@ -204,5 +227,3 @@ export function App() {
     </div>
   );
 }
-
-export { API_BASE_URL };

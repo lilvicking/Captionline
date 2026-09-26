@@ -3,6 +3,9 @@ import { UploadZone } from "./UploadZone";
 
 type HeroProps = {
   onFile: (file: File) => void;
+  /** Transcription requires an account; drives the signed-out call to action. */
+  isAuthenticated: boolean;
+  onRequestSignIn: () => void;
 };
 
 const POINTS = [
@@ -11,7 +14,7 @@ const POINTS = [
   { icon: Lock, text: "Uploaded media is deleted right after transcription" },
 ];
 
-export function Hero({ onFile }: HeroProps) {
+export function Hero({ onFile, isAuthenticated, onRequestSignIn }: HeroProps) {
   return (
     <section className="hero" id="top">
       <div className="hero__inner">
@@ -35,7 +38,11 @@ export function Hero({ onFile }: HeroProps) {
           ))}
         </ul>
 
-        <UploadZone onFile={onFile} />
+        <UploadZone
+          onFile={onFile}
+          isAuthenticated={isAuthenticated}
+          onRequestSignIn={onRequestSignIn}
+        />
       </div>
     </section>
   );

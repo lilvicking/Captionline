@@ -55,6 +55,14 @@ class DatabaseHealth(BaseModel):
     status: str
 
 
+class StripeHealth(BaseModel):
+    """Whether billing is usable, with no key material."""
+
+    configured: bool
+    billing_configured: bool
+    webhook_configured: bool
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -66,3 +74,4 @@ class HealthResponse(BaseModel):
     alignment_enabled: bool
     cuda_available: bool
     database: DatabaseHealth | None = None
+    stripe: StripeHealth | None = None

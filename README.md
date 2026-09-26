@@ -6,6 +6,8 @@ Captionline is a focused video-captioning SaaS. The product workflow is:
 
 Phase 1 is the frontend foundation. **Phase 2 adds real transcription** through a Python
 WhisperX service. **Phase 3A adds accounts, plans, and usage tracking** on PostgreSQL.
+**Phase 3B adds the commercial foundation**: metered processing, server-authoritative entitlement,
+and Stripe subscriptions.
 
 ---
 
@@ -59,21 +61,38 @@ configuration, and Railway deployment.
   working logout invalidation.
 
 The preview limit is now read from the signed-in account when one exists, and always falls back to
-the local 30-second free tier. Transcription is **not** gated by login yet, so the existing upload
+the local 30-second free tier.
+
+## What Phase 3B adds
+
+- **Metered transcription** — uploading requires an account, and each file is charged its real
+  measured duration. The backend measures duration itself with `ffprobe`, so a client cannot
+  declare its own length.
+- **Allowance enforcement** — a request that would exceed the remaining allowance is refused with
+  `402` *before* WhisperX spends any compute, with a message stating exactly what is left and what
+  the file needs.
+- **Charge only for success** — allowance is reserved before processing and converted to real usage
+  only if transcription succeeds. Failed, rejected, and unreadable uploads cost nothing.
+- **Concurrency protection** — a row-level lock makes two simultaneous requests unable to spend the
+  same remaining allowance.
+- **Stripe subscriptions** — Checkout and the Customer Portal, with signature-verified webhooks as
+  the only source of paid entitlement.
+- **Real pricing** — Free, Creator ($19), Pro ($39), and Creator Annual ($190, two months free),
+  served from the backend catalogue so the frontend never hardcodes prices.
+
+**Finished-video rendering still does not exist.** Paid plans carry the export *entitlement*; the
+button stays disabled and says so plainly. Nothing is faked. Transcription is **not** gated by login yet, so the existing upload
 flow keeps working.
 
 ## What is NOT implemented yet
 
 Nothing below exists yet, by design:
 
-- No usage enforcement on transcription yet (the accounting exists; it is not yet applied)
+- No finished-video rendering (paid plans carry the entitlement only)
 - No email verification or password reset
 - No social/OAuth login
-- No billing or Stripe integration
 - No Google Drive or other cloud storage integration
 - No permanent media storage (uploads are temporary and deleted immediately)
-- No server-side or client-side video rendering. The **Export video** button is intentionally
-  **disabled** and labelled as unavailable; it does not fake a render or produce a file.
 - No speaker diarization, no translation, no analytics
 - No background job queue, so very long videos on CPU may exceed a proxy timeout
 - No final pricing. Plan names are placeholders and no prices are published.
@@ -93,27 +112,99 @@ and because a real logout must invalidate a token immediately.
 The token is kept in `localStorage` and sent as `Authorization: Bearer`. The hardening path, if
 wanted later, is httpOnly `SameSite=None; Secure` cookies plus CSRF protection.
 
-## Free plan defaults
+## Plan catalogue
 
-Defined once in `backend/app/plans.py`, seeded onto each new account, and served from
-`GET /api/account/entitlement`:
+Defined once in `backend/app/plans.py` and served to the frontend from `GET /api/account/plans`, so
+prices are never duplicated or hardcoded in the UI.
 
-| Setting | Value |
-| ------- | ----- |
-| Monthly processing allowance | 600 seconds (10 minutes) |
-| Finished-video preview | 30 seconds |
-| Full preview | no |
-| Finished-video export | no |
+| Plan | id | Price | Allowance | Usage reset | Billing | Full preview | Export |
+| ---- | -- | ----- | --------- | ----------- | ------- | ------------ | ------ |
+| Free | `free` | $0 | 600 s (10 min)/month | monthly | — | 30 s | no |
+| Creator | `creator_monthly` | $19 | 30,000 s (500 min)/month | monthly | monthly | full | yes |
+| Pro | `pro_monthly` | $39 | 90,000 s (1,500 min)/month | monthly | monthly | full | yes |
+| Creator Annual | `creator_annual` | $190 | 30,000 s (500 min)/month | **monthly** | **annual** | full | yes |
 
-Seconds are the unit of record; minutes are derived only for display. Usage periods are UTC calendar
-months and roll over lazily on read, so no scheduled job is needed.
+**Billing cadence and usage cadence are separate.** Creator Annual is charged once a year by Stripe
+but its 500-minute allowance still resets every month, the same as Creator Monthly — paying for a
+year up front does not buy twelve months of processing at once, and **unused minutes do not roll
+over**. It is simply the same allowance for $38 less per year.
 
-### Stripe, later
+The `PlanDefinition` model reflects this with `billing_period` (when Stripe charges) separate from
+`usage_period_months` (when the allowance refreshes). Unknown plan ids fall back to Free, so a bad
+value can never widen access.
 
-Not implemented. The `subscription_*` columns on `users` are shaped as a local mirror of billing
-state, so Stripe can become the authoritative source without a redesign: a webhook will write
-`subscription_status` and `subscription_external_id`, and the backend will then trust Stripe over
-the mirror when deciding paid access.
+## Processing accounting
+
+Seconds are the unit of record; minutes are derived only for display. The **backend measures the
+media itself** with `ffprobe` and bills `ceil(duration)`. A file whose duration cannot be measured
+is rejected rather than transcribed, because unmetered transcription would be worse than a refusal.
+
+Usage periods are the UTC calendar month for every plan — including the annually billed one — and
+roll over lazily on read (`ensure_current_usage_period`) so no scheduled job is needed. A rollover
+discards unused allowance and never touches the subscription status, so a paid customer keeps full
+preview and export across every reset.
+
+Nothing is charged for an upload that merely starts:
+
+| Outcome | Allowance |
+| ------- | --------- |
+| Transcription succeeds | charged the measured duration |
+| Transcription fails | released, nothing charged |
+| Rejected (allowance, size, unreadable) | released, nothing charged |
+| Process crashes | hold reclaimed after a TTL |
+
+Allowance is checked and held in one transaction under a row-level lock, so two simultaneous
+requests cannot spend the same remaining allowance. The lock is released before the expensive
+WhisperX work, so a long transcription never holds a database lock.
+
+## Authentication architecture
+
+Opaque bearer sessions rather than JWTs, because the web app and API are separate origins and
+because a real logout must invalidate a token immediately.
+
+- Passwords are hashed with **Argon2id** (OWASP parameters) via `argon2-cffi`. Plaintext is never
+  stored or logged.
+- A 256-bit `secrets` token is issued on register/login. Only its SHA-256 hash is stored, so a
+  database leak yields no usable credentials.
+- `POST /api/auth/logout` revokes the session row, so the token stops working at once.
+- Email enumeration is blocked: an unknown email and a wrong password return an identical `401`.
+- Tokens are never logged, and expired/revoked rows are purged opportunistically.
+
+The token is kept in `localStorage` and sent as `Authorization: Bearer`. The hardening path is
+httpOnly `SameSite=None; Secure` cookies plus CSRF protection; attaching the custom domain
+unblocks that, since `SameSite=None` is rejected across sites.
+
+## Stripe architecture
+
+**Stripe is the authority for paid access.** Creating a Checkout session changes nothing — a
+browser returning from Stripe cannot grant access on its own. Entitlement changes only when a
+**signature-verified webhook** is processed.
+
+| Endpoint | Auth | Purpose |
+| -------- | ---- | ------- |
+| `POST /api/billing/checkout` | Bearer | Create a Checkout session for a plan id |
+| `POST /api/billing/portal` | Bearer | Open the Customer Portal |
+| `POST /api/billing/webhook` | Stripe signature | Subscription lifecycle events |
+
+Handled events: `checkout.session.completed` (records the customer id only),
+`customer.subscription.created/updated/deleted/paused/resumed`, `invoice.paid`,
+`invoice.payment_failed`. Unknown events are acknowledged and ignored.
+
+- **Idempotent** — every event id is recorded, so a redelivery is not applied twice.
+- **Fails closed** — an unmapped Stripe Price ID grants no elevated access, and a
+  `past_due`/`canceled`/`unpaid` status returns the account to Free.
+- **Cancellation preserves data** — only entitlements change; the account and captions survive.
+
+No key, product, or price is stored in this repository; every value comes from the environment.
+
+### Stripe dashboard setup (manual)
+
+1. Create three recurring Prices ($19/mo, $39/mo, $190/yr); copy each `price_…` ID.
+2. Copy the restricted API key.
+3. Add a webhook endpoint at `https://<your-api-domain>/api/billing/webhook` subscribed to the
+   events above; copy its signing secret.
+4. Enable the Customer Portal.
+5. Point `FRONTEND_URL` at your real frontend origin.
 
 ## Preview entitlement (Phase 2)
 
@@ -132,7 +223,7 @@ export type PreviewEntitlement = {
 `resolvePreviewEntitlement()` returns the free tier and is the value the app starts with.
 `entitlementFromServer()` converts `GET /api/account/entitlement` into a preview entitlement, and
 it **fails closed**: an unrestricted preview is only honoured when the server explicitly reports
-`hasFullPreview === true`. A missing, malformed, or unexpected payload collapses to the free
+`has_full_preview === true`. A missing, malformed, or unexpected payload collapses to the free
 30-second window, so a bad response can never widen access. There is deliberately **no**
 `isPaid = true` development flag that could be flipped and shipped by accident.
 
@@ -150,9 +241,8 @@ playhead there.
 
 ### This is still not a security boundary
 
-The frontend must never be the component that decides whether someone paid. The browser check is a
-UX gate. When Stripe arrives, the **backend** must determine entitlement from the authenticated
-account's subscription, and the client will merely reflect that. Until then, the client assumes the
+The browser check is a UX gate. The backend independently enforces the paid preview decision, and
+when Stripe is in place the backend is the authority. The client merely mirrors it and assumes the
 more restrictive answer whenever it is unsure.
 
 ## Tech stack
@@ -174,19 +264,21 @@ more restrictive answer whenever it is unsure.
 ├── .env.example                # VITE_API_URL for the frontend
 ├── .env.local                  # local overrides (git-ignored)
 ├── README.md
-├── backend/                    # Phase 2/3 service
+├── backend/                    # Phases 2-3 service
 │   ├── alembic/                # Migration environment + revisions
 │   ├── alembic.ini
 │   ├── app/
-│   │   ├── main.py             # FastAPI app, CORS, health, transcribe
+│   │   ├── main.py             # FastAPI app, CORS, health, transcribe gate
 │   │   ├── config.py           # Env-driven settings
-│   │   ├── schemas.py          # Transcription response models
+│   │   ├── schemas.py          # Response models
 │   │   ├── transcribe.py       # WhisperX lifecycle + output normalization
-│   │   ├── plans.py            # Free plan defaults (single source of truth)
-│   │   ├── usage.py            # Usage periods, snapshots, entitlement
+│   │   ├── plans.py            # Plan catalogue (single source of truth)
+│   │   ├── usage.py            # Periods, reservations, allowance, snapshot
+│   │   ├── media.py            # ffprobe duration measurement
+│   │   ├── stripe_client.py    # Stripe client, checkout, signature verification
 │   │   ├── db/                 # SQLAlchemy base, models, session
-│   │   ├── routers/            # auth.py, account.py
-│   │   └── security/           # Argon2id, tokens, dependencies, schemas
+│   │   ├── routers/            # auth.py, account.py, billing.py
+│   │   └── security/           # Argon2id, tokens, dependencies, sessions
 │   ├── tests/                  # pytest suite
 │   ├── requirements.txt
 │   ├── requirements.lock.txt
@@ -210,6 +302,7 @@ more restrictive answer whenever it is unsure.
     ├── lib/
     │   ├── api.ts                # Transcription client + response -> cue mapping
     │   ├── auth.ts               # Account API client + token storage
+    │   ├── billing.ts            # Plan catalogue, checkout, portal
     │   ├── srt.ts                # .srt generation + client-side download
     │   ├── color.ts              # Hex validation / alpha conversion
     │   ├── text.ts               # Greedy caption line/word wrapping
@@ -364,16 +457,23 @@ Server-side configuration lives in `backend/.env.example`:
 | Variable | Purpose |
 | -------- | ------- |
 | `DATABASE_URL` | PostgreSQL in production (`${{Postgres.DATABASE_URL}}`), optional locally |
+| `STRIPE_SECRET_KEY` | Stripe API key. Absent means billing reports "not configured" |
+| `STRIPE_WEBHOOK_SECRET` | Verifies webhook signatures |
+| `STRIPE_PRICE_CREATOR_MONTHLY` | Price ID for Creator |
+| `STRIPE_PRICE_PRO_MONTHLY` | Price ID for Pro |
+| `STRIPE_PRICE_CREATOR_ANNUAL` | Price ID for Creator Annual |
+| `FRONTEND_URL` | Absolute frontend origin for Stripe redirects |
 | `SESSION_TTL_DAYS` | Bearer session lifetime |
 | `MIN_PASSWORD_LENGTH` | Minimum registration password length |
 | `WHISPERX_MODEL` | Transcription model |
 | `WHISPERX_DEVICE` | `auto` (CUDA when available) or `cpu` |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `MAX_UPLOAD_MB` | Upload size limit |
+| `FFPROBE_PATH` | `ffprobe` location, used to measure real duration |
 | `PORT` | Supplied by Railway |
 
-These must **not** be prefixed with `VITE_`. `DATABASE_URL` is the only secret, and the platform
-supplies it.
+These must **not** be prefixed with `VITE_`. `DATABASE_URL` and the Stripe values are the only
+secrets, and the platform supplies them.
 
 ## Railway deployment
 
@@ -392,11 +492,22 @@ alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-
 Set on the Railway API service:
 
 ```
+# REQUIRED
 DATABASE_URL=${{Postgres.DATABASE_URL}}
+
+# STRIPE REQUIRED (for live billing; the service runs without them)
+STRIPE_SECRET_KEY=...
+STRIPE_WEBHOOK_SECRET=...
+STRIPE_PRICE_CREATOR_MONTHLY=...
+STRIPE_PRICE_PRO_MONTHLY=...
+STRIPE_PRICE_CREATOR_ANNUAL=...
+
+# RECOMMENDED
+FRONTEND_URL=https://<your-frontend-domain>
+CORS_ORIGINS=https://<your-frontend-domain>
 WHISPERX_MODEL=small
 WHISPERX_DEVICE=cpu
 WHISPERX_COMPUTE_TYPE=int8
-CORS_ORIGINS=https://<your-frontend-domain>
 MAX_UPLOAD_MB=500
 SESSION_TTL_DAYS=30
 ```
@@ -404,15 +515,25 @@ SESSION_TTL_DAYS=30
 Then set `VITE_API_URL` on the frontend to the Railway backend URL and rebuild the frontend. No
 source change is needed to switch environments.
 
-**Migration safety:** the schema is only ever changed by a reviewed Alembic revision. `create_all`
-is never used against a live database, so a deploy cannot silently reshape a table.
+**Deployment order:** migrations → API → web (`VITE_API_URL`) → `CORS_ORIGINS`/`FRONTEND_URL` →
+Stripe variables and webhook.
 
-**Not yet done:** no Stripe, no usage enforcement on transcription, and no GPU infrastructure
+**Migration safety:** the schema is only ever changed by a reviewed Alembic revision. `create_all`
+is never used against a live database, so a deploy cannot silently reshape a table. `0002` is purely
+additive (one column, two tables), so an application rollback stays safe; a schema rollback would
+discard in-flight usage holds and the webhook idempotency log.
+
+**Custom domain:** nothing depends on a Railway hostname. Attach the domain to both services, set
+`CORS_ORIGINS` and `FRONTEND_URL` to it, rebuild the web app, and register the webhook against the
+API's custom domain. DNS is not touched by this repository.
+
+**Not yet done:** nothing has been deployed from this branch, and no GPU infrastructure was
 provisioned. See the size and timeout caveats in `backend/README.md`.
 
 ## Git
 
 - Phase 1 lives on `phase-1-foundation` (committed as `542f718`).
 - Phase 2 lives on `phase-2-transcription` (committed as `460a53a`).
-- Phase 3A work is on `phase-3-accounts`.
+- Phase 3A lives on `phase-3-accounts` (committed as `0a62286`).
+- Phase 3B work is on `phase-3b-commercial`.
 - `main` is untouched.

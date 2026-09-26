@@ -17,8 +17,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# ffmpeg is required by WhisperX/faster-whisper to decode uploaded media.
-# libgomp1 is needed by torch CPU kernels. libpq is the PostgreSQL client
+# ffmpeg is required by WhisperX/faster-whisper to decode uploaded media, and
+# ffprobe measures real media duration before any processing.
+# libgomp1 is needed by torch CPU kernels. libpq5 is the PostgreSQL client
 # library used by psycopg.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg libgomp1 libpq5 \
@@ -41,4 +42,8 @@ EXPOSE 8000
 #
 # Migrations are NOT run on import or via create_all: the schema is only ever
 # changed by a reviewed Alembic revision.
+#
+# STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, the three STRIPE_PRICE_* values, and
+# FRONTEND_URL come from the Railway service's environment variables. The service
+# starts without them; billing endpoints then report that Stripe is not configured.
 CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

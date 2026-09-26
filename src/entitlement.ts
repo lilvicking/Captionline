@@ -72,9 +72,13 @@ export function resolvePreviewEntitlement(): PreviewEntitlement {
  * Converts `GET /api/account/entitlement` into a preview entitlement.
  *
  * Fails closed by design. An unrestricted preview is only honoured when the
- * server explicitly reports `hasFullPreview === true`; anything else, including
- * a null/missing limit, a non-numeric value, or a completely unexpected payload,
+ * server explicitly reports full preview as true; anything else, including a
+ * null/missing limit, a non-numeric value, or a completely unexpected payload,
  * falls back to the free 30-second window.
+ *
+ * Field names are read in the snake_case the API actually returns
+ * (`has_full_preview`, `preview_limit_seconds`). The camelCase spellings are
+ * accepted as well so a future rename cannot silently widen access.
  */
 export function entitlementFromServer(payload: unknown): PreviewEntitlement {
   if (typeof payload !== "object" || payload === null) {
@@ -82,7 +86,8 @@ export function entitlementFromServer(payload: unknown): PreviewEntitlement {
   }
 
   const record = payload as Record<string, unknown>;
-  const serverSaysFullPreview = record.hasFullPreview === true;
+  const serverSaysFullPreview =
+    record.has_full_preview === true || record.hasFullPreview === true;
 
   if (serverSaysFullPreview) {
     return {
@@ -92,7 +97,7 @@ export function entitlementFromServer(payload: unknown): PreviewEntitlement {
     };
   }
 
-  const limit = record.previewLimitSeconds;
+  const limit = record.preview_limit_seconds ?? record.previewLimitSeconds;
 
   // Only trust a limit the server actually sent as a usable number.
   if (typeof limit === "number" && Number.isFinite(limit) && limit >= 0) {

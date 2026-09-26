@@ -4,14 +4,28 @@ import { AlertCircle, FileVideo, Upload } from "lucide-react";
 
 type UploadZoneProps = {
   onFile: (file: File) => void;
+  /** Transcription requires an account, so the gate is shown while signed out. */
+  isAuthenticated: boolean;
+  onRequestSignIn: () => void;
 };
 
 const ACCEPTED_TYPES = "video/*";
 
-export function UploadZone({ onFile }: UploadZoneProps) {
+export function UploadZone({
+  onFile,
+  isAuthenticated,
+  onRequestSignIn,
+}: UploadZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A signed-out visitor is asked to create an account rather than allowed to
+  // pick a file that the server would reject anyway.
+  const requestSignIn = () => {
+    setError(null);
+    onRequestSignIn();
+  };
 
   const accept = (file: File | undefined) => {
     if (!file) {
@@ -20,6 +34,11 @@ export function UploadZone({ onFile }: UploadZoneProps) {
 
     if (!file.type.startsWith("video/")) {
       setError(`"${file.name}" is not a video file. Choose a video such as MP4, MOV, or WebM.`);
+      return;
+    }
+
+    if (!isAuthenticated) {
+      requestSignIn();
       return;
     }
 
@@ -54,20 +73,37 @@ export function UploadZone({ onFile }: UploadZoneProps) {
         </span>
 
         <p className="dropzone__title">
-          {isDragging ? "Drop it here" : "Drag a video here, or choose a file"}
+          {isDragging
+            ? "Drop it here"
+            : isAuthenticated
+              ? "Drag a video here, or choose a file"
+              : "Create a free account to start transcribing"}
         </p>
         <p className="dropzone__hint">
-          Your file is sent to Captionline for transcription and deleted straight after. Nothing is
-          stored.
+          {isAuthenticated
+            ? "Your file is sent to Captionline for transcription and deleted straight after. Nothing is stored."
+            : "Free accounts include 10 processing minutes a month and a 30-second finished preview."}
         </p>
 
         <button
           className="button button--primary"
           type="button"
-          onClick={() => inputRef.current?.click()}
+          onClick={() => {
+            if (isAuthenticated) {
+              inputRef.current?.click();
+            } else {
+              requestSignIn();
+            }
+          }}
         >
-          <Upload size={16} aria-hidden="true" />
-          Choose video
+          {isAuthenticated ? (
+            <>
+              <Upload size={16} aria-hidden="true" />
+              Choose video
+            </>
+          ) : (
+            "Create a free account"
+          )}
         </button>
 
         <input

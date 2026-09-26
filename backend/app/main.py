@@ -19,21 +19,34 @@ import shutil
 import tempfile
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session as OrmSession
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__
 from .config import get_settings
-from .db.session import is_configured
-from .routers import account, auth
-from .schemas import DatabaseHealth, HealthResponse, TranscriptionResponse
+from .db.models import User
+from .db.session import get_db, is_configured
+from .media import MediaProbeError, billable_seconds, probe_media
+from .routers import account, auth, billing
+from .schemas import DatabaseHealth, HealthResponse, StripeHealth, TranscriptionResponse
+from .security.deps import get_current_user
+from .security.sessions import purge_expired_sessions
+from .stripe_client import refresh_price_mapping
 from .transcribe import (
     ModelUnavailableError,
     cuda_available,
     model_state,
     preload,
     transcribe_file,
+)
+from .usage import (
+    AllowanceExceededError,
+    finalize_reservation,
+    release_reservation,
+    release_stale_reservations,
+    reserve_processing_seconds,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +81,17 @@ async def lifespan(app: FastAPI):
         settings.whisperx_model,
         settings.whisperx_align_enabled,
     )
+
+    # Build the Stripe Price ID -> plan mapping from the environment.
+    refresh_price_mapping()
+
+    if settings.stripe_secret_key:
+        logger.info("Stripe is configured.")
+    else:
+        # Not an error: transcription and accounts work without it, and the
+        # pricing UI reports that checkout is unavailable.
+        logger.info("Stripe is not configured; billing endpoints will report as unavailable.")
+
     if settings.preload_model:
         # Off the event loop: model loading can take a while.
         await run_in_threadpool(preload, settings)
@@ -103,6 +127,7 @@ else:
 
 app.include_router(auth.router)
 app.include_router(account.router)
+app.include_router(billing.router)
 
 
 def _database_health() -> DatabaseHealth:
@@ -191,6 +216,11 @@ async def health() -> HealthResponse:
         alignment_enabled=settings.whisperx_align_enabled,
         cuda_available=cuda_available(),
         database=_database_health(),
+        stripe=StripeHealth(
+            configured=settings.stripe_is_configured,
+            billing_configured=settings.stripe_billing_is_configured,
+            webhook_configured=bool(settings.stripe_webhook_secret),
+        ),
     )
 
 
@@ -201,15 +231,32 @@ async def root() -> dict[str, str]:
         "version": __version__,
         "health": "/api/health",
         "transcribe": "/api/transcribe",
+        "plans": "/api/account/plans",
     }
 
 
 @app.post("/api/transcribe", response_model=TranscriptionResponse)
-async def transcribe(file: UploadFile = File(...)) -> TranscriptionResponse:
-    """Transcribe an uploaded video or audio file.
+async def transcribe(
+    request: Request,
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> TranscriptionResponse:
+    """Transcribe an uploaded video or audio file for an authenticated account.
 
-    The file is written to a temporary directory, transcribed and aligned with
-    WhisperX, and the temporary directory is removed before returning.
+    Order of operations, which is what makes the accounting safe:
+
+      1. authenticate (the dependency rejects anonymous callers with 401)
+      2. stream the upload to a temporary directory
+      3. measure the real duration server-side with ffprobe — the client never
+         declares its own length
+      4. reserve allowance under a row lock, or reject with 402 before WhisperX
+         spends any compute
+      5. transcribe and align
+      6. finalize the reservation on success, release it on any failure
+
+    The temporary directory is removed in `finally`, so the uploaded media is
+    never retained, including on failure paths.
     """
     filename = os.path.basename(file.filename or "upload")
     content_type = file.content_type
@@ -224,8 +271,16 @@ async def transcribe(file: UploadFile = File(...)) -> TranscriptionResponse:
             ),
         )
 
+    # Reclaim any hold left behind by an earlier crashed request.
+    try:
+        release_stale_reservations(db, settings.usage_reservation_ttl_seconds)
+        purge_expired_sessions(db)
+    except Exception as exc:  # pragma: no cover - housekeeping must not block work
+        logger.warning("Housekeeping skipped: %s", type(exc).__name__)
+
     # Ephemeral by design: a fresh directory per request, always cleaned up.
     work_dir = tempfile.mkdtemp(prefix="captionline-", dir=settings.temp_dir)
+    reservation_id = 0
 
     try:
         suffix = os.path.splitext(filename)[1].lower() or ".bin"
@@ -234,10 +289,62 @@ async def transcribe(file: UploadFile = File(...)) -> TranscriptionResponse:
         await _save_upload(file, destination, settings.max_upload_bytes)
         await file.close()
 
-        logger.info("Transcribing upload %s (%s)", filename, content_type)
+        # --- Server-side measurement -------------------------------------
+        try:
+            media = await run_in_threadpool(probe_media, destination)
+        except MediaProbeError as exc:
+            # Reject rather than transcribe for free: an unmeasurable file cannot
+            # be billed, and free unmetered transcription is worse than a refusal.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        # CPU/GPU heavy work must not block the event loop.
-        result = await run_in_threadpool(transcribe_file, destination, settings)
+        required_seconds = billable_seconds(media.duration_seconds)
+
+        if not media.has_audio:
+            raise HTTPException(
+                status_code=422,
+                detail="The uploaded file has no audio track to transcribe.",
+            )
+
+        if (
+            settings.max_media_duration_seconds > 0
+            and required_seconds > settings.max_media_duration_seconds
+        ):
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "This file is longer than the maximum supported length of "
+                    f"{settings.max_media_duration_seconds} seconds."
+                ),
+            )
+
+        # --- Allowance reservation ---------------------------------------
+        try:
+            reservation = await run_in_threadpool(
+                reserve_processing_seconds, db, user, required_seconds
+            )
+            reservation_id = reservation.reservation_id
+        except AllowanceExceededError as exc:
+            raise HTTPException(status_code=402, detail=exc.detail) from exc
+
+        logger.info(
+            "Transcribing %s: %ss required, %ss remaining after reservation",
+            filename,
+            required_seconds,
+            reservation.remaining_seconds,
+        )
+
+        # --- Transcription ------------------------------------------------
+        try:
+            result = await run_in_threadpool(transcribe_file, destination, settings)
+        except Exception:
+            # Never charge for work that did not succeed.
+            await run_in_threadpool(release_reservation, db, reservation_id)
+            reservation_id = 0
+            raise
+
+        # Charge only for a successful transcription.
+        await run_in_threadpool(finalize_reservation, db, reservation_id)
+        reservation_id = 0
 
         logger.info(
             "Transcription complete: %d segments, language=%s, aligned=%s",
@@ -251,14 +358,28 @@ async def transcribe(file: UploadFile = File(...)) -> TranscriptionResponse:
         raise
     except ModelUnavailableError as exc:
         logger.error("Transcription engine unavailable: %s", exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Transcription is temporarily unavailable. Please try again shortly.",
+        ) from exc
     except RuntimeError as exc:
-        logger.error("Transcription failed: %s", exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Message comes from our own decoder wrapper, not from a library.
+        logger.warning("Transcription rejected the media: %s", exc)
+        raise HTTPException(status_code=422, detail="The uploaded file could not be transcribed.") from exc
     except Exception as exc:  # pragma: no cover
+        # The detail is deliberately generic: stack traces and internal paths
+        # must never reach the client.
         logger.exception("Unexpected transcription error")
         raise HTTPException(
-            status_code=500, detail=f"Unexpected transcription error: {exc}"
+            status_code=500, detail="Something went wrong while transcribing this file."
         ) from exc
     finally:
+        if reservation_id:
+            # Safety net: if an exception escaped before the handlers above ran,
+            # the hold is released so the customer is not charged.
+            try:
+                await run_in_threadpool(release_reservation, db, reservation_id)
+            except Exception:  # pragma: no cover
+                logger.warning("Could not release reservation %s", reservation_id)
+
         shutil.rmtree(work_dir, ignore_errors=True)

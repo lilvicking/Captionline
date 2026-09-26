@@ -26,12 +26,16 @@ type AuthContextValue = {
   status: AuthStatus;
   user: AuthUser | null;
   account: AccountEntitlement | null;
+  /** Whether the signed-in account is on a paid plan. */
+  isPaidPlan: boolean;
   /**
    * Entitlement the editor enforces. Always starts at (and falls back to) the
    * free 30-second tier, so an anonymous visitor or a failed fetch can never
    * gain a wider preview.
    */
   entitlement: PreviewEntitlement;
+  /** Re-reads plan and usage from the server. Called after transcription. */
+  refresh: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -132,6 +136,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [completeSignIn],
   );
 
+  /**
+   * Re-reads entitlement and usage. Used after a transcription so the usage
+   * meter reflects what was just spent, and after a Stripe redirect returns.
+   *
+   * On failure the current values are kept and, if there are none, the free tier
+   * stays in place. It never widens access.
+   */
+  const refresh = useCallback(async () => {
+    const token = getStoredToken();
+
+    if (!token) {
+      return;
+    }
+
+    try {
+      const next = await fetchEntitlement(token);
+      setAccount(next);
+      setEntitlement(entitlementFromServer(next));
+    } catch {
+      // Keep the last known state; the server remains the authority.
+    }
+  }, []);
+
   const signOut = useCallback(async () => {
     const token = getStoredToken();
 
@@ -148,8 +175,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [clearSession]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, user, account, entitlement, signIn, signUp, signOut }),
-    [status, user, account, entitlement, signIn, signUp, signOut],
+    () => ({
+      status,
+      user,
+      account,
+      isPaidPlan: account?.is_paid_plan === true,
+      entitlement,
+      refresh,
+      signIn,
+      signUp,
+      signOut,
+    }),
+    [status, user, account, entitlement, refresh, signIn, signUp, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

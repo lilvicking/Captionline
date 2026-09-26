@@ -52,12 +52,19 @@ class User(Base):
     # --- Plan ---
     plan: Mapped[str] = mapped_column(String(32), nullable=False, default="free")
 
-    # --- Mirrored subscription state (authoritative source is Stripe later) ---
+    # --- Mirrored subscription state (Stripe is the authority) ---
+    # Populated only from verified Stripe webhooks. The frontend can never set
+    # these, and an unmapped Stripe price leaves them untouched.
     subscription_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=SUBSCRIPTION_NONE
     )
     subscription_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     subscription_external_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    # The Stripe Price ID behind the current plan, so a webhook can map a
+    # subscription back to a plan without re-reading the catalogue.
+    subscription_price_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
     subscription_current_period_end: Mapped[datetime | None] = mapped_column(
@@ -96,6 +103,73 @@ class User(Base):
     )
 
     __table_args__ = (Index("ix_users_plan_status", "plan", "subscription_status"),)
+
+
+# Usage reservation lifecycle.
+RESERVATION_RESERVED = "reserved"
+RESERVATION_FINALIZED = "finalized"
+RESERVATION_RELEASED = "released"
+
+
+class UsageReservation(Base):
+    """A short-lived hold on processing allowance.
+
+    Accounting is two-phase so a customer is only ever charged for media that was
+    actually transcribed:
+
+      1. `reserve` checks the allowance and inserts a ``reserved`` row in the same
+         transaction that holds a row lock on the user. Concurrent requests
+         therefore queue behind each other and cannot both spend the same
+         remaining allowance.
+      2. On success the row becomes ``finalized`` and the seconds are added to
+         ``users.processing_used_seconds``.
+      3. On failure the row becomes ``released`` and nothing is charged.
+
+    A request that crashes leaves a ``reserved`` row behind, which
+    ``release_stale_reservations`` reclaims after a TTL so a crash cannot
+    permanently consume allowance.
+    """
+
+    __tablename__ = "usage_reservations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    reserved_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=RESERVATION_RESERVED
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_usage_reservations_user_status", "user_id", "status"),
+    )
+
+
+class StripeEvent(Base):
+    """A processed Stripe event id, for idempotent webhook handling.
+
+    Stripe retries webhooks until it receives a 2xx, so the same event can arrive
+    more than once. Recording the event id makes handling idempotent.
+    """
+
+    __tablename__ = "stripe_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class Session(Base):

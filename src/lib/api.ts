@@ -61,6 +61,40 @@ export class TranscriptionError extends Error {
   }
 }
 
+/** Human-readable reason for a failed transcription request. */
+export type TranscriptionFailureReason =
+  | "auth-required"
+  | "insufficient-minutes"
+  | "file-too-large"
+  | "invalid-media"
+  | "unavailable"
+  | "failed";
+
+/**
+ * Classifies an HTTP status into a reason the UI can act on.
+ *
+ * The server remains the authority on all of these; the client only decides
+ * which message to show.
+ */
+export function failureReasonFor(status: number): TranscriptionFailureReason {
+  if (status === 401 || status === 403) {
+    return "auth-required";
+  }
+  if (status === 402) {
+    return "insufficient-minutes";
+  }
+  if (status === 413) {
+    return "file-too-large";
+  }
+  if (status === 400 || status === 422) {
+    return "invalid-media";
+  }
+  if (status === 503) {
+    return "unavailable";
+  }
+  return "failed";
+}
+
 async function readError(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: unknown };
@@ -86,14 +120,25 @@ export async function fetchHealth(signal?: AbortSignal): Promise<HealthResult> {
 /**
  * Uploads a local media file for transcription.
  *
- * The file is sent as multipart/form-data under the `file` field. Progress is
+ * The file is sent as multipart/form-data under the `file` field. An
+ * authenticated account is required, so the bearer token is attached. Progress is
  * reported through the request lifecycle only, since fetch cannot report
  * upload progress.
  */
 export async function transcribeFile(
   file: File,
+  token: string | null,
   signal?: AbortSignal,
 ): Promise<TranscriptionResult> {
+  if (!token) {
+    // The server would reject this anyway; failing fast avoids uploading a large
+    // file that is certain to be refused.
+    throw new TranscriptionError(
+      "Create a free account or log in to transcribe video.",
+      401,
+    );
+  }
+
   const body = new FormData();
   body.append("file", file, file.name);
 
@@ -102,6 +147,7 @@ export async function transcribeFile(
   try {
     response = await fetch(`${API_BASE_URL}/api/transcribe`, {
       method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
       body,
       signal,
     });

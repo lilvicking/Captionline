@@ -122,11 +122,52 @@ def revoke_current_session(
         db.commit()
 
 
+def get_optional_user(
+    request: Request,
+    db: OrmSession = Depends(get_db),
+) -> User | None:
+    """Resolve the authenticated user, or None when signed out.
+
+    Used by endpoints that must work for anonymous visitors, such as the public
+    pricing table. Never raises for a missing token.
+    """
+    if not is_configured():
+        return None
+
+    token = _extract_bearer_token(request)
+
+    if not token:
+        return None
+
+    now = datetime.now(timezone.utc)
+    session_row = db.scalar(
+        select(SessionModel).where(SessionModel.token_hash == hash_token(token))
+    )
+
+    if session_row is None or session_row.revoked_at is not None:
+        return None
+
+    expires_at = session_row.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if now >= expires_at:
+        return None
+
+    user = db.get(User, session_row.user_id)
+
+    if user is None or not user.is_active:
+        return None
+
+    return user
+
+
 __all__ = [
     "CREDENTIALS_REQUIRED",
     "DATABASE_UNAVAILABLE",
     "INVALID_CREDENTIALS",
     "get_current_user",
+    "get_optional_user",
     "get_settings",
     "require_database",
     "revoke_current_session",

@@ -33,11 +33,17 @@ export type AccountEntitlement = {
   plan: string;
   plan_label: string;
   subscription_status: string;
+  is_paid_plan: boolean;
   monthly_processing_allowance_seconds: number;
   processing_used_seconds: number;
+  processing_reserved_seconds: number;
   processing_remaining_seconds: number;
   usage_period_started_at: string;
   usage_period_ends_at: string;
+  usage_period_months: number;
+  usage_resets_monthly: boolean;
+  /** True when Stripe bills annually. Independent of the monthly usage reset. */
+  billed_annually: boolean;
   preview_limit_seconds: number | null;
   has_full_preview: boolean;
   can_export: boolean;

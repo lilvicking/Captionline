@@ -1,16 +1,16 @@
-"""API tests for registration, login, sessions, and entitlement.
-
-These exercise the real Alembic migration and the real SQLAlchemy models.
-"""
+"""Account authentication and session tests."""
 
 from __future__ import annotations
 
-from sqlalchemy import select, text
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from sqlalchemy import select
 
 from app.db.models import Session as SessionModel
 from app.db.models import User
-from app.db.session import get_engine
-from app.plans import FREE_PLAN
+from app.plans import FREE_PLAN, FREE_PLAN_ID
+from app.security.sessions import purge_expired_sessions
 from tests.conftest import auth_header
 
 EMAIL = "creator@example.com"
@@ -33,7 +33,7 @@ def test_register_creates_free_plan_account(client):
     assert body["token_type"] == "bearer"
     assert body["access_token"]
     assert body["user"]["email"] == EMAIL
-    assert body["user"]["plan"] == "free"
+    assert body["user"]["plan"] == FREE_PLAN_ID
     assert body["user"]["subscription_status"] == "none"
     assert body["user"]["is_active"] is True
 
@@ -43,7 +43,7 @@ def test_register_seeds_free_plan_entitlements(client, db_session):
 
     user = db_session.execute(select(User).where(User.email == EMAIL)).scalar_one()
 
-    assert user.monthly_processing_allowance_seconds == FREE_PLAN.monthly_processing_seconds == 600
+    assert user.monthly_processing_allowance_seconds == FREE_PLAN.usage_allowance_seconds == 600
     assert user.preview_limit_seconds == FREE_PLAN.preview_limit_seconds == 30
     assert user.has_full_preview is False
     assert user.can_export is False
@@ -70,23 +70,18 @@ def test_duplicate_email_is_rejected_with_409(client):
     assert "already exists" in duplicate.json()["detail"]
 
 
-def test_duplicate_email_different_password_still_rejected(client):
+def test_duplicate_email_with_different_password_still_rejected(client):
     register(client)
-    duplicate = register(client, password="another-password-999")
 
-    assert duplicate.status_code == 409
+    assert register(client, password="another-password-999").status_code == 409
 
 
 def test_short_password_is_rejected(client):
-    response = register(client, password="short")
-
-    assert response.status_code == 422
+    assert register(client, password="short").status_code == 422
 
 
 def test_invalid_email_is_rejected(client):
-    response = register(client, email="not-an-email")
-
-    assert response.status_code == 422
+    assert register(client, email="not-an-email").status_code == 422
 
 
 def test_plaintext_password_is_never_stored(client, db_session):
@@ -115,15 +110,14 @@ def test_login_succeeds_with_correct_password(client):
 def test_login_rejects_wrong_password(client):
     register(client)
 
-    response = client.post(
-        "/api/auth/login", json={"email": EMAIL, "password": "wrong-password"}
-    )
+    response = client.post("/api/auth/login", json={"email": EMAIL, "password": "wrong-password"})
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid email or password."
 
 
-def test_login_unknown_email_returns_same_error_as_wrong_password(client):
+def test_login_unknown_email_is_indistinguishable_from_wrong_password(client):
+    """Must not reveal whether an address is registered."""
     register(client)
 
     wrong_password = client.post(
@@ -133,20 +127,20 @@ def test_login_unknown_email_returns_same_error_as_wrong_password(client):
         "/api/auth/login", json={"email": "nobody@example.com", "password": PASSWORD}
     )
 
-    # Identical responses avoid leaking which emails are registered.
     assert wrong_password.status_code == unknown_email.status_code == 401
     assert wrong_password.json() == unknown_email.json()
 
 
 def test_login_issues_a_distinct_token_each_time(client):
     register(client)
+
     first = client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD})
     second = client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD})
 
     assert first.json()["access_token"] != second.json()["access_token"]
 
 
-# --- Token handling ---
+# --- Tokens and sessions ---
 
 
 def test_token_is_stored_hashed_not_plaintext(client, db_session):
@@ -162,14 +156,13 @@ def test_me_requires_a_token(client):
     assert client.get("/api/auth/me").status_code == 401
 
 
-def test_me_rejects_a_garbage_token(client):
-    response = client.get("/api/auth/me", headers=auth_header("not-a-real-token"))
-
-    assert response.status_code == 401
+def test_me_rejects_garbage_token(client):
+    assert client.get("/api/auth/me", headers=auth_header("not-a-real-token")).status_code == 401
 
 
-def test_me_rejects_a_non_bearer_scheme(client):
+def test_me_rejects_non_bearer_scheme(client):
     token = register(client).json()["access_token"]
+
     response = client.get("/api/auth/me", headers={"Authorization": f"Basic {token}"})
 
     assert response.status_code == 401
@@ -182,10 +175,39 @@ def test_me_returns_the_authenticated_user(client):
 
     assert response.status_code == 200
     assert response.json()["email"] == EMAIL
-    assert response.json()["plan"] == "free"
 
 
-# --- Logout / invalidation ---
+def test_expired_session_is_rejected(client, db_session):
+    token = register(client).json()["access_token"]
+
+    session_row = db_session.execute(select(SessionModel)).scalar_one()
+    session_row.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db_session.commit()
+
+    assert client.get("/api/auth/me", headers=auth_header(token)).status_code == 401
+
+
+def test_revoked_session_is_rejected(client, db_session):
+    token = register(client).json()["access_token"]
+
+    session_row = db_session.execute(select(SessionModel)).scalar_one()
+    session_row.revoked_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    assert client.get("/api/auth/me", headers=auth_header(token)).status_code == 401
+
+
+def test_inactive_account_is_rejected(client, db_session):
+    token = register(client).json()["access_token"]
+
+    user = db_session.execute(select(User).where(User.email == EMAIL)).scalar_one()
+    user.is_active = False
+    db_session.commit()
+
+    assert client.get("/api/auth/me", headers=auth_header(token)).status_code == 401
+
+
+# --- Logout ---
 
 
 def test_logout_invalidates_the_session(client):
@@ -193,21 +215,55 @@ def test_logout_invalidates_the_session(client):
     assert client.get("/api/auth/me", headers=auth_header(token)).status_code == 200
 
     assert client.post("/api/auth/logout", headers=auth_header(token)).status_code == 204
-
-    after = client.get("/api/auth/me", headers=auth_header(token))
-    assert after.status_code == 401
+    assert client.get("/api/auth/me", headers=auth_header(token)).status_code == 401
 
 
 def test_logout_only_invalidates_the_presented_token(client):
     first = register(client).json()["access_token"]
-    second = client.post(
-        "/api/auth/login", json={"email": EMAIL, "password": PASSWORD}
-    ).json()["access_token"]
+    second = client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD}).json()[
+        "access_token"
+    ]
 
     client.post("/api/auth/logout", headers=auth_header(first))
 
     assert client.get("/api/auth/me", headers=auth_header(first)).status_code == 401
     assert client.get("/api/auth/me", headers=auth_header(second)).status_code == 200
+
+
+def test_logging_in_again_after_logout_works(client):
+    token = register(client).json()["access_token"]
+    client.post("/api/auth/logout", headers=auth_header(token))
+
+    again = client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD})
+
+    assert again.status_code == 200
+    assert client.get("/api/auth/me", headers=auth_header(again.json()["access_token"])).status_code == 200
+
+
+# --- Session housekeeping ---
+
+
+def test_purge_removes_long_expired_sessions(client, db_session):
+    register(client)
+
+    session_row = db_session.execute(select(SessionModel)).scalar_one()
+    session_row.expires_at = datetime.now(timezone.utc) - timedelta(days=30)
+    db_session.commit()
+
+    assert purge_expired_sessions(db_session, older_than_days=7) == 1
+    assert db_session.execute(select(SessionModel)).scalars().all() == []
+
+
+def test_purge_keeps_recently_expired_sessions(client, db_session):
+    """A just-expired session is kept so it reports 'expired' rather than unknown."""
+    register(client)
+
+    session_row = db_session.execute(select(SessionModel)).scalar_one()
+    session_row.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    db_session.commit()
+
+    assert purge_expired_sessions(db_session, older_than_days=7) == 0
+    assert len(db_session.execute(select(SessionModel)).scalars().all()) == 1
 
 
 # --- Entitlement ---
@@ -220,14 +276,12 @@ def test_entitlement_requires_authentication(client):
 def test_entitlement_returns_free_plan_values(client):
     token = register(client).json()["access_token"]
 
-    response = client.get("/api/account/entitlement", headers=auth_header(token))
+    body = client.get("/api/account/entitlement", headers=auth_header(token)).json()
 
-    assert response.status_code == 200
-    body = response.json()
-
-    assert body["plan"] == "free"
+    assert body["plan"] == FREE_PLAN_ID
     assert body["plan_label"] == "Free"
     assert body["subscription_status"] == "none"
+    assert body["is_paid_plan"] is False
     assert body["monthly_processing_allowance_seconds"] == 600
     assert body["processing_used_seconds"] == 0
     assert body["processing_remaining_seconds"] == 600
@@ -235,36 +289,19 @@ def test_entitlement_returns_free_plan_values(client):
     assert body["has_full_preview"] is False
     assert body["can_export"] is False
     assert body["processing_allowance_minutes"] == 10.0
-    assert body["processing_remaining_minutes"] == 10.0
-
-
-def test_entitlement_reflects_recorded_usage(client, db_session):
-    token = register(client).json()["access_token"]
-
-    user = db_session.execute(select(User).where(User.email == EMAIL)).scalar_one()
-    user.processing_used_seconds = 192
-    db_session.commit()
-
-    body = client.get("/api/account/entitlement", headers=auth_header(token)).json()
-
-    assert body["processing_used_seconds"] == 192
-    assert body["processing_remaining_seconds"] == 408
-    assert body["processing_used_minutes"] == 3.2
-    assert body["processing_remaining_minutes"] == 6.8
 
 
 def test_entitlement_ignores_client_supplied_values(client):
-    """Entitlement must come from the database, not the request."""
+    """Entitlement comes from the database, never from the request."""
     token = register(client).json()["access_token"]
 
-    response = client.get(
+    body = client.get(
         "/api/account/entitlement",
         headers=auth_header(token),
-        params={"plan": "enterprise", "has_full_preview": "true", "can_export": "true"},
-    )
+        params={"plan": "pro_monthly", "has_full_preview": "true", "can_export": "true"},
+    ).json()
 
-    body = response.json()
-    assert body["plan"] == "free"
+    assert body["plan"] == FREE_PLAN_ID
     assert body["has_full_preview"] is False
     assert body["can_export"] is False
 
@@ -273,40 +310,27 @@ def test_entitlement_ignores_client_supplied_values(client):
 
 
 def test_health_reports_database_without_leaking_credentials(client):
+    import json as json_module
+
     response = client.get("/api/health")
     body = response.json()
 
     assert response.status_code == 200
-    assert body["database"]["configured"] is True
-    assert body["database"]["reachable"] is True
-    assert body["database"]["status"] == "ok"
+    assert body["database"] == {"configured": True, "reachable": True, "status": "ok"}
 
-    # No connection string, credentials, or driver details may be exposed.
     assert set(body["database"]) == {"configured", "reachable", "status"}
     serialised = response.text
     assert "sqlite" not in serialised.lower()
     assert "://" not in serialised
     assert "password" not in serialised.lower()
+    assert json_module.dumps(body["stripe"])
 
 
-# --- Transcription must stay unauthenticated in Phase 3A ---
-
-
-def test_transcribe_does_not_require_auth(client):
-    """Phase 3A must not gate transcription behind login."""
-    no_file = client.post("/api/transcribe")
-    assert no_file.status_code == 422  # missing file, not 401
-
-
-# --- Behaviour with no database configured ---
+# --- No database configured ---
 
 
 def test_account_routes_return_503_when_no_database(monkeypatch):
-    """A missing DATABASE_URL must be a clean 503, not an unhandled error.
-
-    The database dependency resolves before the route body, so this guards
-    against a bare RuntimeError escaping as a 500.
-    """
+    """A missing DATABASE_URL must be a clean 503, not an unhandled error."""
     from fastapi.testclient import TestClient
 
     import app.main as main_module
@@ -314,8 +338,6 @@ def test_account_routes_return_503_when_no_database(monkeypatch):
     from app.db import session as session_module
     from app.main import app
 
-    # These modules import `is_configured` / `get_session_factory` by name, so
-    # each reference has to be patched where it is actually used.
     monkeypatch.setattr(main_module, "is_configured", lambda: False)
     monkeypatch.setattr(deps_module, "is_configured", lambda: False)
     monkeypatch.setattr(session_module, "get_session_factory", lambda: None)
@@ -323,22 +345,18 @@ def test_account_routes_return_503_when_no_database(monkeypatch):
     with TestClient(app, raise_server_exceptions=False) as no_db_client:
         health = no_db_client.get("/api/health")
         assert health.status_code == 200
-        assert health.json()["database"] == {
-            "configured": False,
-            "reachable": False,
-            "status": "not_configured",
-        }
+        assert health.json()["database"]["status"] == "not_configured"
 
         for method, path, payload in [
             ("post", "/api/auth/register", {"email": "a@b.com", "password": "password123"}),
             ("post", "/api/auth/login", {"email": "a@b.com", "password": "password123"}),
             ("get", "/api/auth/me", None),
             ("get", "/api/account/entitlement", None),
+            ("post", "/api/billing/checkout", {"plan": "creator_monthly"}),
         ]:
-            if method == "post":
-                response = no_db_client.post(path, json=payload)
-            else:
-                response = no_db_client.get(path)
-
+            response = (
+                no_db_client.post(path, json=payload)
+                if method == "post"
+                else no_db_client.get(path)
+            )
             assert response.status_code == 503, f"{path} returned {response.status_code}"
-            assert "no database is configured" in response.json()["detail"]

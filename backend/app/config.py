@@ -117,6 +117,69 @@ class Settings:
     session_ttl_days: int = field(default_factory=lambda: _env_int("SESSION_TTL_DAYS", 30))
     # Minimum accepted password length for registration.
     min_password_length: int = field(default_factory=lambda: _env_int("MIN_PASSWORD_LENGTH", 8))
+    # How often expired/revoked session rows are purged opportunistically.
+    session_cleanup_interval_seconds: int = field(
+        default_factory=lambda: _env_int("SESSION_CLEANUP_INTERVAL_SECONDS", 900)
+    )
+
+    # --- Stripe (Phase 3B) ------------------------------------------------
+    # No value here is ever invented or committed. When these are absent the
+    # billing endpoints report that Stripe is not configured and the rest of the
+    # service continues to work.
+    stripe_secret_key: str | None = field(
+        default_factory=lambda: _env_optional("STRIPE_SECRET_KEY")
+    )
+    stripe_webhook_secret: str | None = field(
+        default_factory=lambda: _env_optional("STRIPE_WEBHOOK_SECRET")
+    )
+    stripe_price_creator_monthly: str | None = field(
+        default_factory=lambda: _env_optional("STRIPE_PRICE_CREATOR_MONTHLY")
+    )
+    stripe_price_pro_monthly: str | None = field(
+        default_factory=lambda: _env_optional("STRIPE_PRICE_PRO_MONTHLY")
+    )
+    stripe_price_creator_annual: str | None = field(
+        default_factory=lambda: _env_optional("STRIPE_PRICE_CREATOR_ANNUAL")
+    )
+    # Absolute origin of the deployed frontend, used for Stripe success/cancel
+    # redirects. Defaults to the first local dev origin when unset.
+    frontend_url: str = field(
+        default_factory=lambda: _env_str("FRONTEND_URL", "http://localhost:5173")
+    )
+
+    # --- Media probing ---------------------------------------------------
+    # ffprobe ships with ffmpeg and is used to measure media duration before any
+    # processing, so the client never dictates how much is billed.
+    ffprobe_path: str = field(default_factory=lambda: _env_str("FFPROBE_PATH", "ffprobe"))
+    # Media longer than this is rejected outright (0 disables the cap).
+    max_media_duration_seconds: int = field(
+        default_factory=lambda: _env_int("MAX_MEDIA_DURATION_SECONDS", 0)
+    )
+    # A usage reservation left behind by a crashed request is released after this
+    # long, so a crash cannot permanently consume a customer's allowance.
+    usage_reservation_ttl_seconds: int = field(
+        default_factory=lambda: _env_int("USAGE_RESERVATION_TTL_SECONDS", 7200)
+    )
+
+    @property
+    def stripe_is_configured(self) -> bool:
+        """Whether a Stripe secret key is present."""
+        return bool(self.stripe_secret_key)
+
+    @property
+    def stripe_billing_is_configured(self) -> bool:
+        """Whether Stripe can actually create checkout sessions.
+
+        Requires both a secret key and at least one Price ID.
+        """
+        return bool(
+            self.stripe_secret_key
+            and (
+                self.stripe_price_creator_monthly
+                or self.stripe_price_pro_monthly
+                or self.stripe_price_creator_annual
+            )
+        )
 
     @property
     def cors_allows_any(self) -> bool:

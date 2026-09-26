@@ -13,7 +13,7 @@ from ..config import get_settings
 from ..db.models import Session as SessionModel
 from ..db.models import User
 from ..db.session import get_db
-from ..usage import add_month, apply_plan_to_user, monthly_period_start
+from ..usage import add_months, apply_plan_to_user, period_start_for
 from ..security.deps import (
     INVALID_CREDENTIALS,
     get_current_user,
@@ -86,7 +86,7 @@ def register(payload: RegisterRequest, db: OrmSession = Depends(get_db)) -> Toke
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=EMAIL_TAKEN)
 
     now = datetime.now(timezone.utc)
-    period_start = monthly_period_start(now)
+    period_start = period_start_for(now, "free")
 
     user = User(
         email=email,
@@ -94,7 +94,7 @@ def register(payload: RegisterRequest, db: OrmSession = Depends(get_db)) -> Toke
         created_at=now,
         updated_at=now,
         usage_period_started_at=period_start,
-        usage_period_ends_at=add_month(period_start, 1),
+        usage_period_ends_at=add_months(period_start, 1),
     )
 
     # Seeds plan, allowance, preview, and export columns from app/plans.py.

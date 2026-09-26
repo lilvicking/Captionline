@@ -51,13 +51,20 @@ class EntitlementResponse(BaseModel):
     plan: str
     plan_label: str
     subscription_status: str
+    is_paid_plan: bool
 
     monthly_processing_allowance_seconds: int
     processing_used_seconds: int
+    processing_reserved_seconds: int
     processing_remaining_seconds: int
 
     usage_period_started_at: datetime
     usage_period_ends_at: datetime
+    usage_period_months: int
+    usage_resets_monthly: bool
+    #: True when Stripe bills annually for this plan. Independent of the
+    #: monthly usage reset above.
+    billed_annually: bool
 
     preview_limit_seconds: int | None
     has_full_preview: bool
@@ -67,3 +74,41 @@ class EntitlementResponse(BaseModel):
     processing_allowance_minutes: float
     processing_used_minutes: float
     processing_remaining_minutes: float
+
+
+class PlanResponse(BaseModel):
+    """One entry of the authoritative plan catalogue, for the pricing table.
+
+    Billing and usage cadence are reported separately, because for
+    `creator_annual` they differ: billed annually, allowance resets monthly.
+    """
+
+    id: str
+    label: str
+
+    # --- Billing ---
+    price_usd: int
+    billing_period: str
+    monthly_equivalent_price_usd: int
+    annual_savings_usd: int
+
+    # --- Usage ---
+    usage_allowance_seconds: int
+    usage_period_months: int
+    usage_resets_monthly: bool
+
+    # --- Entitlements ---
+    preview_limit_seconds: int | None
+    has_full_preview: bool
+    can_export: bool
+    tagline: str
+    is_current: bool = False
+    purchasable: bool = False
+
+
+class CheckoutResponse(BaseModel):
+    """A Stripe Checkout or Customer Portal session."""
+
+    session_id: str = ""
+    url: str
+    plan: str

@@ -1,55 +1,256 @@
-const TIERS = [
-  {
-    name: "Starter",
-    description: "For one-off clips and smaller channels.",
-    features: ["Caption minutes", "Standard caption styles", ".srt export"],
-  },
-  {
-    name: "Studio",
-    description: "For creators publishing on a schedule.",
-    features: ["More caption minutes", "Custom fonts and positioning", ".srt export", "Project history"],
-    featured: true,
-  },
-  {
-    name: "Team",
-    description: "For teams that need shared workflows.",
-    features: ["Shared caption templates", "Review and approvals", "Priority processing"],
-  },
-];
+import { useCallback, useEffect, useState } from "react";
+import { AlertCircle, Check, Loader2 } from "lucide-react";
+import { useAuth } from "../auth/AuthContext";
+import { getStoredToken } from "../lib/auth";
+import {
+  fetchPlans,
+  formatAllowance,
+  formatPrice,
+  openBillingPortal,
+  startCheckout,
+} from "../lib/billing";
+import type { Plan } from "../lib/billing";
+
+const PERIOD_LABELS: Record<string, string> = {
+  monthly: "per month",
+  annual: "per year",
+};
 
 export function Pricing() {
+  const { status, account, isPaidPlan, refresh } = useAuth();
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [busyPlan, setBusyPlan] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [portalBusy, setPortalBusy] = useState(false);
+
+  const isAuthenticated = status === "authenticated";
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    // Signed-in state only affects which plan is flagged as current.
+    const fetched = await fetchPlans(getStoredToken());
+    setPlans(fetched);
+    setIsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load, isAuthenticated]);
+
+  // Coming back from Stripe redirects: re-read the server's view of the account.
+  useEffect(() => {
+    if (isAuthenticated) {
+      void refresh();
+    }
+  }, [isAuthenticated, refresh]);
+
+  const handleSubscribe = async (plan: Plan) => {
+    setNotice(null);
+
+    if (!isAuthenticated) {
+      setNotice("Create a free account or log in to subscribe.");
+      return;
+    }
+
+    const token = getStoredToken();
+    if (!token) {
+      setNotice("Your session expired. Please log in again.");
+      return;
+    }
+
+    setBusyPlan(plan.id);
+
+    try {
+      const url = await startCheckout(plan.id, token);
+
+      if (!url) {
+        setNotice("Checkout is unavailable right now. Please try again later.");
+        return;
+      }
+
+      // Hand off to Stripe's hosted page. Nothing about access changes until a
+      // verified webhook updates the account on the server.
+      window.location.assign(url);
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Checkout could not be started. Please try again later.",
+      );
+    } finally {
+      setBusyPlan(null);
+    }
+  };
+
+  const handleManage = async () => {
+    const token = getStoredToken();
+    if (!token) {
+      return;
+    }
+
+    setPortalBusy(true);
+    setNotice(null);
+
+    try {
+      const url = await openBillingPortal(token);
+      if (url) {
+        window.location.assign(url);
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The billing portal is unavailable.");
+    } finally {
+      setPortalBusy(false);
+    }
+  };
+
+  const showPlanNotice = notice !== null;
+
   return (
     <section className="section section--tight" id="pricing">
       <div className="section__inner">
         <header className="section__head">
           <p className="eyebrow">Pricing</p>
-          <h2 className="section__title">Plans are still being finalised</h2>
+          <h2 className="section__title">Plans that scale with your channel</h2>
           <p className="section__lede">
-            Captionline is in preview, so there is nothing to pay for yet. Accounts start on the Free
-            plan and final plans and prices will be announced before launch.
+            Every plan includes full caption editing and the complete caption designer. Paid plans
+            unlock the finished preview and export.
           </p>
         </header>
 
-        <div className="tiers">
-          {TIERS.map((tier) => (
-            <article
-              className={`tier${tier.featured ? " tier--featured" : ""}`}
-              key={tier.name}
-            >
-              <h3 className="tier__name">{tier.name}</h3>
-              <p className="tier__description">{tier.description}</p>
-              <p className="tier__price">Pricing to be announced</p>
-              <ul className="tier__features">
-                {tier.features.map((feature) => (
-                  <li key={feature}>{feature}</li>
-                ))}
-              </ul>
-              <button className="button button--ghost button--block" type="button" disabled>
-                Not available yet
-              </button>
-            </article>
-          ))}
-        </div>
+        {showPlanNotice ? (
+          <p className="pricing__notice" role="status">
+            <AlertCircle size={16} aria-hidden="true" />
+            {notice}
+          </p>
+        ) : null}
+
+        {isLoading ? (
+          <p className="pricing__loading">
+            <Loader2 size={16} className="pricing__spinner" aria-hidden="true" />
+            Loading plans…
+          </p>
+        ) : plans.length === 0 ? (
+          // The backend is unreachable or returned nothing. Say so rather than
+          // showing stale or invented prices.
+          <p className="pricing__notice" role="status">
+            Plans are unavailable at the moment. Please try again shortly.
+          </p>
+        ) : (
+          <div className="tiers">
+            {plans.map((plan) => {
+              const isCurrent = account?.plan === plan.id;
+              const isFree = plan.price_usd === 0;
+
+              return (
+                <article
+                  className={`tier${plan.id === "creator_monthly" ? " tier--featured" : ""}${
+                    isCurrent ? " tier--current" : ""
+                  }`}
+                  key={plan.id}
+                >
+                  {isCurrent ? <span className="tier__badge">Current plan</span> : null}
+
+                  <h3 className="tier__name">{plan.label}</h3>
+
+                  <p className="tier__price">
+                    {formatPrice(plan)}
+                    {plan.price_usd > 0 ? (
+                      <span className="tier__period">
+                        {PERIOD_LABELS[plan.billing_period] ?? ""}
+                      </span>
+                    ) : null}
+                  </p>
+
+                  {plan.annual_savings_usd > 0 ? (
+                    <p className="tier__saving">
+                      Save ${plan.annual_savings_usd}/year versus monthly billing
+                    </p>
+                  ) : null}
+
+                  {plan.billing_period === "annual" ? (
+                    <p className="tier__billing">Billed annually</p>
+                  ) : null}
+
+                  <p className="tier__description">{formatAllowance(plan)}</p>
+
+                  <ul className="tier__features">
+                    <li>
+                      <Check size={14} aria-hidden="true" />
+                      Full caption editing and styling
+                    </li>
+                    <li>
+                      <Check size={14} aria-hidden="true" />
+                      {plan.has_full_preview
+                        ? "Full finished-video preview"
+                        : `Finished preview limited to ${plan.preview_limit_seconds ?? 30} seconds`}
+                    </li>
+                    <li>
+                      <Check size={14} aria-hidden="true" />
+                      {plan.can_export
+                        ? "Finished-video export entitlement"
+                        : "Finished-video export on paid plans"}
+                    </li>
+                    <li>
+                      <Check size={14} aria-hidden="true" />
+                      Subtitle (.srt) export
+                    </li>
+                  </ul>
+
+                  {isCurrent ? (
+                    isPaidPlan ? (
+                      <button
+                        className="button button--ghost button--block"
+                        type="button"
+                        onClick={() => void handleManage()}
+                        disabled={portalBusy}
+                      >
+                        {portalBusy ? "Opening…" : "Manage subscription"}
+                      </button>
+                    ) : (
+                      <button
+                        className="button button--ghost button--block"
+                        type="button"
+                        onClick={() => document.getElementById("upload")?.scrollIntoView({ behavior: "smooth" })}
+                      >
+                        Go to the editor
+                      </button>
+                    )
+                  ) : isFree ? (
+                    <button
+                      className="button button--primary button--block"
+                      type="button"
+                      onClick={() =>
+                        document.getElementById("upload")?.scrollIntoView({ behavior: "smooth" })
+                      }
+                    >
+                      Get started
+                    </button>
+                  ) : (
+                    <button
+                      className="button button--primary button--block"
+                      type="button"
+                      onClick={() => void handleSubscribe(plan)}
+                      disabled={busyPlan !== null || !plan.purchasable}
+                    >
+                      {busyPlan === plan.id
+                        ? "Opening checkout…"
+                        : plan.purchasable
+                          ? plan.billing_period === "annual"
+                            ? "Subscribe yearly"
+                            : "Subscribe"
+                          : "Unavailable"}
+                    </button>
+                  )}
+
+                  {!plan.purchasable && !isFree && !isCurrent ? (
+                    <p className="tier__hint">Checkout is not configured for this plan yet.</p>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        )}
       </div>
     </section>
   );
