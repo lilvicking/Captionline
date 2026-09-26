@@ -1,0 +1,13 @@
+# Captionline transcription service - direct dependencies.
+#
+# Exact resolved versions for the whole tree are pinned in requirements.lock.txt
+# (generated with `pip freeze` inside the venv). Install with:
+#     pip install -r requirements.txt
+#
+# WhisperX pulls in faster-whisper (the CTranslate2 backend), torch, torchaudio,
+# pyannote.audio and ctranslate2. No WhisperX source is vendored into this repo.
+
+fastapi
+uvicorn[standard]
+python-multipart
+whisperx

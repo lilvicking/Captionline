@@ -1,0 +1,17 @@
+# Keep the build context small: the virtualenv is created inside the image.
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+models/
+.cache/
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+README.md

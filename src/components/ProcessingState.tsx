@@ -1,54 +1,78 @@
-import { useEffect, useState } from "react";
-import { Info, Loader2 } from "lucide-react";
+import { useEffect } from "react";
+import { AlertTriangle, Info, Loader2 } from "lucide-react";
+
+export type TranscriptionJob = {
+  phase: "uploading" | "transcribing" | "ready" | "error";
+  message: string;
+  detail?: string;
+};
 
 type ProcessingStateProps = {
   fileName: string;
-  onComplete: () => void;
+  job: TranscriptionJob | null;
+  onContinue: () => void;
 };
 
 const STEPS = [
-  "Reading video details",
-  "Preparing the caption track",
-  "Opening your workspace",
+  "Preparing your workspace",
+  "Sending the file to the transcription service",
+  "Transcribing with WhisperX and aligning words",
 ];
 
-const STEP_INTERVAL_MS = 650;
-const FINISH_DELAY_MS = 450;
+const ERROR_STEP_COUNT = 1;
 
-export function ProcessingState({ fileName, onComplete }: ProcessingStateProps) {
-  const [completedSteps, setCompletedSteps] = useState(0);
+/** How long the error stays on screen before the sample captions are shown. */
+const ERROR_DISMISS_MS = 4000;
 
+function completedSteps(phase: TranscriptionJob["phase"] | undefined): number {
+  switch (phase) {
+    case "uploading":
+      return 1;
+    case "transcribing":
+    case "ready":
+      return STEPS.length;
+    case "error":
+      return ERROR_STEP_COUNT;
+    default:
+      return 0;
+  }
+}
+
+export function ProcessingState({ fileName, job, onContinue }: ProcessingStateProps) {
+  const isError = job?.phase === "error";
+  const done = completedSteps(job?.phase);
+
+  // Never strand the user on an error screen: fall through to the editor, which
+  // will be showing sample captions.
   useEffect(() => {
-    const timers = STEPS.map((_, index) =>
-      window.setTimeout(() => {
-        setCompletedSteps(index + 1);
-      }, STEP_INTERVAL_MS * (index + 1)),
-    );
+    if (!isError) {
+      return;
+    }
 
-    const finishTimer = window.setTimeout(
-      onComplete,
-      STEP_INTERVAL_MS * STEPS.length + FINISH_DELAY_MS,
-    );
-
-    return () => {
-      timers.forEach((timer) => window.clearTimeout(timer));
-      window.clearTimeout(finishTimer);
-    };
-  }, [onComplete]);
+    const timer = window.setTimeout(onContinue, ERROR_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [isError, onContinue]);
 
   return (
     <section className="processing">
-      <div className="processing__card">
-        <Loader2 className="processing__spinner" size={26} aria-hidden="true" />
+      <div className={`processing__card${isError ? " processing__card--error" : ""}`}>
+        {isError ? (
+          <AlertTriangle className="processing__spinner processing__spinner--error" size={26} aria-hidden="true" />
+        ) : (
+          <Loader2 className="processing__spinner" size={26} aria-hidden="true" />
+        )}
 
-        <h2 className="processing__title">Preparing your workspace</h2>
+        <h2 className="processing__title">
+          {isError ? "Transcription unavailable" : "Preparing your workspace"}
+        </h2>
         <p className="processing__file">{fileName}</p>
+        <p className="processing__message">{job?.message ?? "Starting"}</p>
 
         <ol className="processing__steps">
           {STEPS.map((step, index) => (
             <li
               key={step}
-              className={`processing__step${index < completedSteps ? " is-done" : ""}`}
+              className={`processing__step${index < done ? " is-done" : ""}`}
             >
               <span className="processing__marker" aria-hidden="true" />
               {step}
@@ -56,14 +80,28 @@ export function ProcessingState({ fileName, onComplete }: ProcessingStateProps) 
           ))}
         </ol>
 
-        <p className="processing__note">
-          <Info size={16} aria-hidden="true" />
-          <span>
-            <strong>Phase 1 uses sample caption data.</strong> No transcription engine is connected
-            yet, so the caption track is placeholder text you can edit freely. Your video is read
-            locally and is never uploaded.
-          </span>
-        </p>
+        {isError ? (
+          <>
+            <p className="processing__note processing__note--error">
+              <AlertTriangle size={16} aria-hidden="true" />
+              <span>
+                {job?.detail ?? "The transcription service could not be reached."} Sample captions
+                will be loaded so you can keep working in the editor.
+              </span>
+            </p>
+            <button className="button button--primary button--block" type="button" onClick={onContinue}>
+              Continue with sample captions
+            </button>
+          </>
+        ) : (
+          <p className="processing__note">
+            <Info size={16} aria-hidden="true" />
+            <span>
+              Transcription runs on the Captionline service using WhisperX. The video itself is not
+              stored anywhere.
+            </span>
+          </p>
+        )}
       </div>
     </section>
   );

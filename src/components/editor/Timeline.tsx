@@ -6,6 +6,9 @@ type TimelineProps = {
   currentTime: number;
   duration: number;
   selectedId: string | null;
+  /** null or hasFullPreview means the whole timeline is watchable. */
+  previewLimitSeconds: number | null;
+  hasFullPreview: boolean;
   onSeek: (time: number) => void;
   onSelect: (id: string) => void;
 };
@@ -15,11 +18,20 @@ export function Timeline({
   currentTime,
   duration,
   selectedId,
+  previewLimitSeconds,
+  hasFullPreview,
   onSeek,
   onSelect,
 }: TimelineProps) {
   const lastCueEnd = cues.reduce((max, cue) => Math.max(max, cue.end), 0);
   const span = duration > 0 ? duration : Math.max(lastCueEnd, 1);
+
+  // The timeline still represents the whole video; the shaded region only marks
+  // where the finished video stops being watchable on the free tier.
+  const limitPercent =
+    hasFullPreview || previewLimitSeconds === null
+      ? null
+      : toPercent(previewLimitSeconds, span);
 
   return (
     <div className="timeline">
@@ -53,6 +65,21 @@ export function Timeline({
           style={{ left: `${toPercent(currentTime, span)}%` }}
           aria-hidden="true"
         />
+
+        {limitPercent !== null && limitPercent < 100 ? (
+          <>
+            <span
+              className="timeline__protected"
+              style={{ left: `${limitPercent}%` }}
+              aria-hidden="true"
+            />
+            <span
+              className="timeline__boundary"
+              style={{ left: `${limitPercent}%` }}
+              aria-hidden="true"
+            />
+          </>
+        ) : null}
       </div>
 
       <input

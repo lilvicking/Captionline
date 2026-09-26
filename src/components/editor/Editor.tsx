@@ -1,8 +1,10 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { ArrowLeft, Info } from "lucide-react";
 import { DEFAULT_CAPTION_STYLE } from "../../types";
 import type { CaptionCue, CaptionStyle } from "../../types";
+import type { TranscriptionMeta } from "../../App";
+import { canPreviewAt, resolvePreviewEntitlement } from "../../entitlement";
 import { CaptionDesigner } from "./CaptionDesigner";
 import { CaptionTrack } from "./CaptionTrack";
 import { ExportPanel } from "./ExportPanel";
@@ -14,33 +16,73 @@ type EditorProps = {
   videoName: string;
   cues: CaptionCue[];
   setCues: Dispatch<SetStateAction<CaptionCue[]>>;
+  transcription: TranscriptionMeta;
   onReset: () => void;
 };
 
 const DEFAULT_CUE_LENGTH_SECONDS = 2;
 
-export function Editor({ videoUrl, videoName, cues, setCues, onReset }: EditorProps) {
+export function Editor({
+  videoUrl,
+  videoName,
+  cues,
+  setCues,
+  transcription,
+  onReset,
+}: EditorProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
+  const [isPreviewLocked, setIsPreviewLocked] = useState(false);
+
+  const entitlement = useMemo(() => resolvePreviewEntitlement(), []);
 
   const playingCue = useMemo(
     () => cues.find((cue) => currentTime >= cue.start && currentTime < cue.end) ?? null,
     [cues, currentTime],
   );
 
-  const seek = useCallback((time: number) => {
-    const video = videoRef.current;
-    if (!video) {
-      return;
-    }
-
-    const target = Math.max(0, time);
-    video.currentTime = target;
-    setCurrentTime(target);
+  const lockPreview = useCallback(() => {
+    setIsPreviewLocked(true);
   }, []);
+
+  const unlockPreview = useCallback(() => {
+    setIsPreviewLocked(false);
+  }, []);
+
+  // A new upload starts with a fresh, unlocked preview window.
+  useEffect(() => {
+    setIsPreviewLocked(false);
+  }, [videoUrl]);
+
+  /**
+   * Seeking is gated by the entitlement, while the caption data is not. Choosing
+   * a cue past the boundary still selects and edits that cue; it just does not
+   * move the protected video playhead there.
+   */
+  const seek = useCallback(
+    (time: number) => {
+      if (!canPreviewAt(time, entitlement)) {
+        setIsPreviewLocked(true);
+        return;
+      }
+
+      // Back inside the allowed window, so the lock no longer applies.
+      setIsPreviewLocked(false);
+
+      const video = videoRef.current;
+      if (!video) {
+        return;
+      }
+
+      const target = Math.max(0, time);
+      video.currentTime = target;
+      setCurrentTime(target);
+    },
+    [entitlement],
+  );
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
@@ -117,17 +159,30 @@ export function Editor({ videoUrl, videoName, cues, setCues, onReset }: EditorPr
 
         <span className="pill">
           <Info size={13} aria-hidden="true" />
-          Sample captions
+          {transcription.source === "whisperx"
+            ? `WhisperX · ${transcription.language ?? "auto"}`
+            : "Sample captions"}
         </span>
       </div>
+
+      {transcription.error ? (
+        <p className="editor__notice" role="status">
+          {transcription.error}
+        </p>
+      ) : null}
 
       <div className="editor__grid">
         <div className="editor__main">
           <VideoStage
             videoRef={videoRef}
             src={videoUrl}
-            activeText={playingCue?.text ?? null}
+            activeCue={playingCue}
+            currentTime={currentTime}
             style={captionStyle}
+            entitlement={entitlement}
+            isPreviewLocked={isPreviewLocked}
+            onPreviewLock={lockPreview}
+            onPreviewUnlock={unlockPreview}
             onVerticalPositionChange={handleVerticalPositionChange}
             onTimeUpdate={handleTimeUpdate}
             onLoadedMetadata={handleLoadedMetadata}
@@ -138,6 +193,8 @@ export function Editor({ videoUrl, videoName, cues, setCues, onReset }: EditorPr
             currentTime={currentTime}
             duration={duration}
             selectedId={selectedId}
+            previewLimitSeconds={entitlement.previewLimitSeconds}
+            hasFullPreview={entitlement.hasFullPreview}
             onSeek={seek}
             onSelect={handleSelect}
           />

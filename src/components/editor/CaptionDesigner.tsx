@@ -148,8 +148,10 @@ export function CaptionDesigner({ fileName, style, onChange, onReset }: CaptionD
 
             {style.wordHighlight ? (
               <p className="designer__note">
-                Word-level highlighting is stored but inactive in Phase 1. It activates once real
-                word timestamps arrive from the transcription engine.
+                Karaoke highlighting uses the word-level timestamps returned by the transcription
+                service. The active word is whichever word spans{" "}
+                <code>video.currentTime</code>, so nothing is faked. Captions without word timings
+                render as plain text.
               </p>
             ) : null}
           </div>
@@ -231,6 +233,17 @@ export function CaptionDesigner({ fileName, style, onChange, onReset }: CaptionD
               step={0.005}
               format={(value) => `${value.toFixed(3)}em`}
               onChange={(value) => update("letterSpacing", value)}
+            />
+
+            <RangeField
+              id="caption-word-spacing"
+              label="Word spacing"
+              value={style.wordSpacing}
+              min={-0.1}
+              max={0.5}
+              step={0.01}
+              format={(value) => `${value.toFixed(2)}em`}
+              onChange={(value) => update("wordSpacing", value)}
             />
 
             <RangeField

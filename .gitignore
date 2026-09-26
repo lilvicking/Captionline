@@ -14,6 +14,17 @@ build/
 .env.*
 !.env.example
 
+# Python backend
+backend/.venv/
+backend/venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+models/
+.cache/
+
 # Logs
 logs/
 *.log

@@ -1,3 +1,13 @@
+export type CaptionWord = {
+  word: string;
+  /** Start time in seconds. */
+  start: number;
+  /** End time in seconds. */
+  end: number;
+  /** Transcription confidence, when the engine reported one. */
+  score?: number;
+};
+
 export type CaptionCue = {
   id: string;
   /** Start time in seconds. */
@@ -5,6 +15,11 @@ export type CaptionCue = {
   /** End time in seconds. */
   end: number;
   text: string;
+  /**
+   * Word-level timing, present when the transcription service returned aligned
+   * words. Drives karaoke and active-word highlighting.
+   */
+  words?: CaptionWord[];
 };
 
 /* -------------------------------------------------------------------------- */
@@ -38,6 +53,14 @@ export type CaptionStyle = {
   uppercase: boolean;
   /** em */
   letterSpacing: number;
+  /**
+   * em
+   *
+   * Additional space between words, independent of `letterSpacing` (which
+   * controls the gap between characters). Applied visually in the preview, so
+   * caption text, transcription data, and .srt output stay untouched.
+   */
+  wordSpacing: number;
   /** unitless multiplier */
   lineHeight: number;
 
@@ -90,6 +113,7 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   textAlign: "center",
   uppercase: false,
   letterSpacing: 0,
+  wordSpacing: 0,
   lineHeight: 1.25,
 
   backgroundColor: "#000000",

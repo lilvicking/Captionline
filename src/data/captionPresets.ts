@@ -31,6 +31,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       shadowEnabled: true,
       lineHeight: 1.3,
       letterSpacing: 0,
+      wordSpacing: 0.02,
       maxWidthPercent: 80,
       maxCharsPerLine: null,
       verticalPosition: 88,
@@ -47,6 +48,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       textColor: "#FFFFFF",
       uppercase: true,
       letterSpacing: -0.01,
+      wordSpacing: 0.04,
       lineHeight: 1.1,
       backgroundOpacity: 0,
       backgroundPadding: 8,
@@ -70,6 +72,8 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       fontWeight: 700,
       textColor: "#FFFFFF",
       textAlign: "center",
+      letterSpacing: 0,
+      wordSpacing: 0.03,
       lineHeight: 1.25,
       backgroundColor: "#FF0033",
       backgroundOpacity: 1,
@@ -93,6 +97,7 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       textColor: "#F2F2F2",
       textAlign: "center",
       letterSpacing: 0.02,
+      wordSpacing: 0.04,
       lineHeight: 1.45,
       backgroundOpacity: 0,
       backgroundPadding: 8,
@@ -114,6 +119,8 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       fontWeight: 600,
       textColor: "#FFFFFF",
       textAlign: "center",
+      letterSpacing: 0,
+      wordSpacing: 0.02,
       lineHeight: 1.3,
       backgroundColor: "#000000",
       backgroundOpacity: 0.78,
@@ -138,6 +145,9 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       textAlign: "center",
       uppercase: true,
       letterSpacing: 0.01,
+      // Generous word gap: karaoke words render as separate elements for
+      // highlighting, and the heavy uppercase face clumps badly without it.
+      wordSpacing: 0.12,
       lineHeight: 1.15,
       backgroundColor: "#000000",
       backgroundOpacity: 0.35,
@@ -150,8 +160,8 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       maxWidthPercent: 84,
       maxCharsPerLine: 24,
       verticalPosition: 74,
-      // Phase 1 stores the highlight colours but never animates them: there are
-      // no word timestamps until a real transcription engine is connected.
+      // Highlight colours drive the active word, driven by the word-level
+      // timestamps returned by the transcription service.
       wordHighlight: {
         color: "#FFD400",
         activeColor: "#FF0033",

@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent, RefObject } from "react";
 import { clamp } from "../../lib/time";
 import { withAlpha } from "../../lib/color";
-import { applyUppercase, wrapCaption } from "../../lib/text";
+import { applyUppercase, wrapCaption, wrapWords } from "../../lib/text";
 import { CAPTION_FONT_MAP } from "../../data/captionFonts";
 import { CAPTION_STYLE_REFERENCE_HEIGHT } from "../../types";
-import type { CaptionStyle } from "../../types";
+import type { CaptionCue, CaptionStyle, CaptionWord } from "../../types";
+import { canPreviewAt, hasReachedPreviewLimit } from "../../entitlement";
+import type { PreviewEntitlement } from "../../entitlement";
+import { PreviewLock } from "./PreviewLock";
 
 /** Used before the stage has been measured, so the first paint is already sane. */
 const FALLBACK_SCALE = 1 / 3;
@@ -16,18 +19,43 @@ const KEYBOARD_STEP_LARGE = 5;
 type VideoStageProps = {
   videoRef: RefObject<HTMLVideoElement>;
   src: string;
-  activeText: string | null;
+  activeCue: CaptionCue | null;
+  currentTime: number;
   style: CaptionStyle;
+  entitlement: PreviewEntitlement;
+  isPreviewLocked: boolean;
+  onPreviewLock: () => void;
+  onPreviewUnlock: () => void;
   onVerticalPositionChange: (value: number) => void;
   onTimeUpdate: () => void;
   onLoadedMetadata: () => void;
 };
 
+/** Finds the word being spoken at `time`, if the cue carries word timings. */
+function activeWordAt(words: CaptionWord[] | undefined, time: number): CaptionWord | null {
+  if (!words || words.length === 0) {
+    return null;
+  }
+
+  for (const word of words) {
+    if (time >= word.start && time < word.end) {
+      return word;
+    }
+  }
+
+  return null;
+}
+
 export function VideoStage({
   videoRef,
   src,
-  activeText,
+  activeCue,
+  currentTime,
   style,
+  entitlement,
+  isPreviewLocked,
+  onPreviewLock,
+  onPreviewUnlock,
   onVerticalPositionChange,
   onTimeUpdate,
   onLoadedMetadata,
@@ -51,6 +79,72 @@ export function VideoStage({
 
     return () => observer.disconnect();
   }, []);
+
+  /**
+   * Free-tier preview enforcement.
+   *
+   * Playback is stopped at the boundary, and any seek past it is pulled back to
+   * the boundary so the protected frames are never displayed. This covers the
+   * native browser controls as well as Captionline's own timeline, because both
+   * drive the same `seeking` event on the media element.
+   *
+   * UX-level protection only; see `src/entitlement.ts` for why this is not a
+   * security boundary.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+
+    if (!video) {
+      return;
+    }
+
+    const stopAtBoundary = () => {
+      if (!hasReachedPreviewLimit(video.currentTime, entitlement)) {
+        return;
+      }
+
+      if (!video.paused) {
+        video.pause();
+      }
+      onPreviewLock();
+    };
+
+    const guardSeek = () => {
+      if (canPreviewAt(video.currentTime, entitlement)) {
+        // Moved back inside the allowed window.
+        onPreviewUnlock();
+        return;
+      }
+
+      // Pull the playhead back to the boundary. This re-enters `seeking` once
+      // with currentTime === limit, where canPreviewAt is true, so it settles.
+      video.currentTime = entitlement.previewLimitSeconds ?? video.currentTime;
+      video.pause();
+      onPreviewLock();
+    };
+
+    video.addEventListener("timeupdate", stopAtBoundary);
+    video.addEventListener("play", stopAtBoundary);
+    video.addEventListener("seeking", guardSeek);
+
+    return () => {
+      video.removeEventListener("timeupdate", stopAtBoundary);
+      video.removeEventListener("play", stopAtBoundary);
+      video.removeEventListener("seeking", guardSeek);
+    };
+  }, [videoRef, entitlement, onPreviewLock, onPreviewUnlock]);
+
+  /** Restarts the allowed preview window and lifts the lock. */
+  const replayPreview = useCallback(() => {
+    const video = videoRef.current;
+
+    if (video) {
+      video.pause();
+      video.currentTime = 0;
+    }
+    onPreviewUnlock();
+    onTimeUpdate();
+  }, [videoRef, onPreviewUnlock, onTimeUpdate]);
 
   /**
    * Scale factor from the 1080px reference frame to the rendered stage, so
@@ -114,8 +208,28 @@ export function VideoStage({
     }
   };
 
-  const lines = applyUppercase(activeText ?? "", style.uppercase);
-  const wrappedLines = wrapCaption(lines, style.maxCharsPerLine);
+  const activeText = activeCue?.text ?? null;
+  const displayText = activeText === null ? "" : applyUppercase(activeText, style.uppercase);
+
+  // Word highlighting only applies when the cue carries real word timings and a
+  // karaoke style is selected. Timings are never invented.
+  const words = activeCue?.words;
+  const karaoke = style.wordHighlight;
+  const spokenWord = karaoke ? activeWordAt(words, currentTime) : null;
+  const useWordRendering = Boolean(karaoke && words && words.length > 0);
+
+  // Kept as two separate values so each branch stays precisely typed.
+  const wordLines = useWordRendering
+    ? wrapWords(
+        (words ?? []).map((word) => ({
+          ...word,
+          word: style.uppercase ? word.word.toUpperCase() : word.word,
+        })),
+        style.maxCharsPerLine,
+      )
+    : null;
+
+  const textLines = useWordRendering ? null : wrapCaption(displayText, style.maxCharsPerLine);
 
   const captionStyle: CSSProperties = {
     top: `${style.verticalPosition}%`,
@@ -126,6 +240,7 @@ export function VideoStage({
     color: style.textColor,
     textAlign: style.textAlign,
     letterSpacing: `${style.letterSpacing}em`,
+    wordSpacing: `${style.wordSpacing}em`,
     lineHeight: style.lineHeight,
     textTransform: style.uppercase ? "uppercase" : "none",
     background: withAlpha(style.backgroundColor, style.backgroundOpacity),
@@ -153,7 +268,14 @@ export function VideoStage({
         onLoadedMetadata={onLoadedMetadata}
       />
 
-      {activeText ? (
+      {isPreviewLocked ? (
+        <>
+          <div className="stage__shield" aria-hidden="true" />
+          <PreviewLock onReplayPreview={replayPreview} />
+        </>
+      ) : null}
+
+      {activeText && !isPreviewLocked ? (
         <div className="overlay" style={{ top: `${style.verticalPosition}%` }}>
           <div
             className={`overlay__text${isDragging ? " is-dragging" : ""}`}
@@ -171,11 +293,45 @@ export function VideoStage({
             onPointerCancel={endDrag}
             onKeyDown={handleKeyDown}
           >
-            {wrappedLines.map((line, index) => (
-              <span className="overlay__line" key={`${index}-${line}`}>
-                {line}
-              </span>
-            ))}
+            {wordLines
+              ? wordLines.map((line, lineIndex) => (
+                  <span className="overlay__line" key={`wline-${lineIndex}`}>
+                    {line.map((word, wordIndex) => {
+                      const isSpoken =
+                        spokenWord !== null &&
+                        word.start === spokenWord.start &&
+                        word.end === spokenWord.end;
+
+                      return (
+                        <Fragment key={`word-${lineIndex}-${wordIndex}`}>
+                          <span
+                            className={`overlay__word${isSpoken ? " is-spoken" : ""}`}
+                            style={
+                              isSpoken && karaoke
+                                ? { color: karaoke.activeColor }
+                                : { color: karaoke?.color ?? style.textColor }
+                            }
+                          >
+                            {word.word}
+                          </span>
+                          {/*
+                            A real space between the word elements. `word-spacing`
+                            only applies to space characters, so karaoke words would
+                            otherwise clump together. This is a rendering separator
+                            between separate elements, not a change to the caption
+                            text, which stays intact for editing and .srt export.
+                          */}
+                          {wordIndex < line.length - 1 ? " " : null}
+                        </Fragment>
+                      );
+                    })}
+                  </span>
+                ))
+              : (textLines ?? []).map((line, lineIndex) => (
+                  <span className="overlay__line" key={`tline-${lineIndex}`}>
+                    {line}
+                  </span>
+                ))}
           </div>
 
           {isDragging ? (

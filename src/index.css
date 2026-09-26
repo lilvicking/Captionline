@@ -563,6 +563,34 @@ textarea {
   word-break: break-all;
 }
 
+.processing__message {
+  margin-top: 14px;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+
+.processing__card--error .processing__spinner--error {
+  color: var(--red);
+  animation: none;
+}
+
+.processing__note--error {
+  background: var(--red-tint);
+  border-color: var(--red);
+  color: var(--red-dark);
+  margin-bottom: 14px;
+}
+
+.editor__notice {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--red);
+  background: var(--red-tint);
+  color: var(--red-dark);
+  font-size: 0.85rem;
+}
+
 .processing__steps {
   margin: 26px 0;
   display: flex;
@@ -733,6 +761,14 @@ textarea {
 .overlay__line {
   display: block;
   white-space: pre-wrap;
+}
+
+.overlay__word {
+  transition: color 0.08s linear;
+}
+
+.overlay__word.is-spoken {
+  font-weight: 900;
 }
 
 .overlay__badge {
@@ -1171,6 +1207,98 @@ textarea {
   font-size: 0.75rem;
   color: var(--gray-400);
   line-height: 1.45;
+}
+
+/* ---------- Preview lock (free tier) ---------- */
+
+.stage__shield {
+  position: absolute;
+  inset: 0;
+  background: var(--black);
+  opacity: 0.82;
+  pointer-events: none;
+}
+
+.lock {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: rgba(10, 10, 11, 0.94);
+}
+
+.lock__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--red);
+  color: var(--white);
+}
+
+.lock__title {
+  font-size: 1.05rem;
+  color: var(--white);
+}
+
+.lock__body {
+  max-width: 340px;
+  font-size: 0.85rem;
+  color: var(--gray-300);
+  line-height: 1.5;
+}
+
+.lock__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.lock__note {
+  max-width: 360px;
+  margin-top: 4px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--gray-700);
+  background: var(--ink-soft);
+  font-size: 0.78rem;
+  color: var(--gray-300);
+  line-height: 1.45;
+}
+
+/* ---------- Timeline preview boundary ---------- */
+
+.timeline__protected {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(10, 10, 11, 0.42) 0 6px,
+    rgba(10, 10, 11, 0.18) 6px 12px
+  );
+  pointer-events: none;
+}
+
+.timeline__boundary {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--red);
+  pointer-events: none;
 }
 
 /* ---------- Caption track ---------- */
