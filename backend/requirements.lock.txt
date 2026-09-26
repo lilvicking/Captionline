@@ -3,9 +3,9 @@
 # Generated with pip freeze inside backend/.venv on Windows with a CUDA build
 # of torch. This records the EXACT versions used for local development.
 #
-# Do NOT use this file inside the Linux/Docker CPU image: the +cu128 torch
-# build is platform specific and will not resolve there. Use requirements.txt
-# for container builds so pip selects the correct platform wheels.
+# Do NOT use this file inside the Linux/Docker image: the +cu128 torch build
+# is platform specific and will not resolve there. Use requirements.txt for
+# container builds so pip selects the correct platform wheels.
 #
 # Local environment: Python 3.12, NVIDIA RTX 3050 (CUDA available).
 
@@ -17,10 +17,13 @@ annotated-doc==0.0.5
 annotated-types==0.8.0
 antlr4-python3-runtime==4.9.3
 anyio==4.15.1
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.1.0
 asteroid-filterbanks==0.4.0
 attrs==26.1.0
 av==18.1.0
 certifi==2026.7.22
+cffi==2.1.1
 charset-normalizer==3.5.1
 click==8.5.0
 cloudpickle==3.1.2
@@ -30,7 +33,9 @@ contourpy==1.4.0
 ctranslate2==4.8.2
 cycler==0.12.1
 defusedxml==0.7.1
+dnspython==2.8.0
 einops==0.8.2
+email-validator==2.3.0
 fastapi==0.141.1
 faster-whisper==1.2.1
 filelock==4.0.3
@@ -41,9 +46,12 @@ fsspec==2026.9.0
 googleapis-common-protos==1.75.4
 grpcio==1.84.0
 h11==0.16.0
+httpcore==1.0.9
 httptools==0.8.0
+httpx==0.28.1
 huggingface_hub==0.36.2
 idna==3.20
+iniconfig==2.3.0
 Jinja2==3.1.6
 joblib==1.6.0
 julius==0.2.8
@@ -77,19 +85,24 @@ optuna==5.0.0
 packaging==26.3
 pandas==3.0.6
 pillow==12.3.0
+pluggy==1.6.0
 primePy==1.3
 propcache==0.5.4
 protobuf==7.36.2
+psycopg==3.3.6
+psycopg-binary==3.3.6
 pyannote-audio==4.0.7
 pyannote-core==6.0.1
 pyannote-database==6.1.1
 pyannote-metrics==4.1
 pyannote-pipeline==4.0.0
 pyannoteai-sdk==0.4.0
+pycparser==3.0
 pydantic==2.13.5
 pydantic_core==2.46.5
 Pygments==2.21.0
 pyparsing==3.3.3
+pytest==9.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.3
 python-multipart==0.0.32

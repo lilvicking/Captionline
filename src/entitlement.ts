@@ -11,8 +11,7 @@
  *
  * This is **UX-level preview protection only**. It is deliberately implemented
  * in the browser, which means it is *not* a security boundary: anyone can
- * disable it with devtools, and the original uploaded media never leaves the
- * user's own machine in the first place.
+ * disable it with devtools.
  *
  * Production entitlement **must** be decided server-side. When accounts and
  * billing arrive:
@@ -27,6 +26,11 @@
  * Until that server endpoint exists, this module always resolves to the free
  * tier — there is deliberately no `isPaid = true` development flag that could
  * be flipped and accidentally shipped.
+ *
+ * Phase 3A adds `entitlementFromServer` so the signed-in entitlement can flow
+ * in from `GET /api/account/entitlement`. It is written to **fail closed**: any
+ * missing, malformed, or unexpected field yields the restrictive free tier, so
+ * a bad response can never widen preview access.
  */
 
 /** Length of the finished-video preview granted to unpaid users, in seconds. */
@@ -46,7 +50,7 @@ export type PreviewEntitlement = {
   source: PreviewEntitlementSource;
 };
 
-/** The unpaid / free-tier entitlement applied throughout Phase 2. */
+/** The unpaid / free-tier entitlement applied as the default and fallback. */
 export const FREE_PREVIEW_ENTITLEMENT: PreviewEntitlement = {
   previewLimitSeconds: FREE_PREVIEW_SECONDS,
   hasFullPreview: false,
@@ -56,10 +60,49 @@ export const FREE_PREVIEW_ENTITLEMENT: PreviewEntitlement = {
 /**
  * Resolves the entitlement to enforce for the current viewer.
  *
- * Phase 2 always returns the free tier. This is the single seam to replace when
- * the backend starts reporting real subscription state.
+ * Defaults to the free tier, which is also what an anonymous visitor gets. This
+ * remains the synchronous fallback; `entitlementFromServer` supplies the
+ * authenticated value once an account is signed in.
  */
 export function resolvePreviewEntitlement(): PreviewEntitlement {
+  return FREE_PREVIEW_ENTITLEMENT;
+}
+
+/**
+ * Converts `GET /api/account/entitlement` into a preview entitlement.
+ *
+ * Fails closed by design. An unrestricted preview is only honoured when the
+ * server explicitly reports `hasFullPreview === true`; anything else, including
+ * a null/missing limit, a non-numeric value, or a completely unexpected payload,
+ * falls back to the free 30-second window.
+ */
+export function entitlementFromServer(payload: unknown): PreviewEntitlement {
+  if (typeof payload !== "object" || payload === null) {
+    return FREE_PREVIEW_ENTITLEMENT;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const serverSaysFullPreview = record.hasFullPreview === true;
+
+  if (serverSaysFullPreview) {
+    return {
+      previewLimitSeconds: null,
+      hasFullPreview: true,
+      source: "server",
+    };
+  }
+
+  const limit = record.previewLimitSeconds;
+
+  // Only trust a limit the server actually sent as a usable number.
+  if (typeof limit === "number" && Number.isFinite(limit) && limit >= 0) {
+    return {
+      previewLimitSeconds: limit,
+      hasFullPreview: false,
+      source: "server",
+    };
+  }
+
   return FREE_PREVIEW_ENTITLEMENT;
 }
 

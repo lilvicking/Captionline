@@ -8,7 +8,8 @@ export function Footer() {
         </span>
 
         <p className="footer__note">
-          Phase 1 preview. Videos are processed in your browser and captions use sample data.
+          Videos are transcribed by WhisperX and deleted after processing. Free previews are limited
+          to 30 seconds.
         </p>
       </div>
     </footer>

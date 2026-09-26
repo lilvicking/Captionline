@@ -1,11 +1,11 @@
 import type { CaptionCue } from "../types";
 
 /**
- * Phase 1 placeholder caption track.
+ * Local fallback caption track.
  *
- * There is no transcription engine connected yet, so every project starts from
- * this sample data. The shape matches the cue model that a real transcription
- * service will return later, which keeps the editor wiring unchanged.
+ * Used when transcription is unavailable or no speech is detected, so the editor
+ * stays usable. Carries no word timings, which is why the sample track cannot
+ * drive karaoke highlighting.
  */
 export const SAMPLE_CAPTIONS: CaptionCue[] = [
   { id: "cue-1", start: 0.4, end: 2.6, text: "Every video deserves captions that feel intentional." },

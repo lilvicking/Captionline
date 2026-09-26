@@ -57,7 +57,8 @@ export function UploadZone({ onFile }: UploadZoneProps) {
           {isDragging ? "Drop it here" : "Drag a video here, or choose a file"}
         </p>
         <p className="dropzone__hint">
-          The file stays on this device. Nothing is uploaded in Phase 1.
+          Your file is sent to Captionline for transcription and deleted straight after. Nothing is
+          stored.
         </p>
 
         <button

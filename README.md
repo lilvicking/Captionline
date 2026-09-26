@@ -5,7 +5,7 @@ Captionline is a focused video-captioning SaaS. The product workflow is:
 **Upload video → process/transcribe → edit timed captions → style captions → export captions/video**
 
 Phase 1 is the frontend foundation. **Phase 2 adds real transcription** through a Python
-WhisperX service.
+WhisperX service. **Phase 3A adds accounts, plans, and usage tracking** on PostgreSQL.
 
 ---
 
@@ -46,12 +46,29 @@ architecture that later backend phases plug into.
 See [`backend/README.md`](backend/README.md) for the full service documentation, model
 configuration, and Railway deployment.
 
+## What Phase 3A adds
+
+- **Accounts** — sign up, log in, log out, and a lightweight account panel with plan and usage
+  (for example `3.2 / 10 minutes used`).
+- **PostgreSQL** — SQLAlchemy 2.0 with Alembic migrations against the Railway Postgres service via
+  `DATABASE_URL`.
+- **Server-authoritative plans and usage** — the free plan (10 processing minutes per month, 30
+  second preview, no export) is defined once on the backend and served from
+  `GET /api/account/entitlement`.
+- **Secure sessions** — Argon2id password hashing and opaque bearer tokens stored hashed, with
+  working logout invalidation.
+
+The preview limit is now read from the signed-in account when one exists, and always falls back to
+the local 30-second free tier. Transcription is **not** gated by login yet, so the existing upload
+flow keeps working.
+
 ## What is NOT implemented yet
 
 Nothing below exists yet, by design:
 
-- No database
-- No authentication or user accounts
+- No usage enforcement on transcription yet (the accounting exists; it is not yet applied)
+- No email verification or password reset
+- No social/OAuth login
 - No billing or Stripe integration
 - No Google Drive or other cloud storage integration
 - No permanent media storage (uploads are temporary and deleted immediately)
@@ -59,10 +76,44 @@ Nothing below exists yet, by design:
   **disabled** and labelled as unavailable; it does not fake a render or produce a file.
 - No speaker diarization, no translation, no analytics
 - No background job queue, so very long videos on CPU may exceed a proxy timeout
-- No accounts, no authentication, and no real subscription entitlement. The preview limit is enforced
-  in the browser only, so it is a UX gate and not a security boundary (see below).
-- No video export. The **Export video** button remains disabled and does not fake a render.
 - No final pricing. Plan names are placeholders and no prices are published.
+
+## Authentication architecture
+
+Opaque bearer sessions rather than JWTs, because the web app and API are separate Railway origins
+and because a real logout must invalidate a token immediately.
+
+- Passwords are hashed with **Argon2id** (OWASP parameters) via `argon2-cffi`. Plaintext is never
+  stored or logged.
+- A 256-bit `secrets` token is issued on register/login. Only its SHA-256 hash is stored, so a
+  database leak yields no usable credentials.
+- `POST /api/auth/logout` revokes the session row, so the token stops working at once.
+- Email enumeration is blocked: an unknown email and a wrong password return an identical `401`.
+
+The token is kept in `localStorage` and sent as `Authorization: Bearer`. The hardening path, if
+wanted later, is httpOnly `SameSite=None; Secure` cookies plus CSRF protection.
+
+## Free plan defaults
+
+Defined once in `backend/app/plans.py`, seeded onto each new account, and served from
+`GET /api/account/entitlement`:
+
+| Setting | Value |
+| ------- | ----- |
+| Monthly processing allowance | 600 seconds (10 minutes) |
+| Finished-video preview | 30 seconds |
+| Full preview | no |
+| Finished-video export | no |
+
+Seconds are the unit of record; minutes are derived only for display. Usage periods are UTC calendar
+months and roll over lazily on read, so no scheduled job is needed.
+
+### Stripe, later
+
+Not implemented. The `subscription_*` columns on `users` are shaped as a local mirror of billing
+state, so Stripe can become the authoritative source without a redesign: a webhook will write
+`subscription_status` and `subscription_external_id`, and the backend will then trust Stripe over
+the mirror when deciding paid access.
 
 ## Preview entitlement (Phase 2)
 
@@ -78,7 +129,11 @@ export type PreviewEntitlement = {
 };
 ```
 
-`resolvePreviewEntitlement()` always returns the free tier today. There is deliberately **no**
+`resolvePreviewEntitlement()` returns the free tier and is the value the app starts with.
+`entitlementFromServer()` converts `GET /api/account/entitlement` into a preview entitlement, and
+it **fails closed**: an unrestricted preview is only honoured when the server explicitly reports
+`hasFullPreview === true`. A missing, malformed, or unexpected payload collapses to the free
+30-second window, so a bad response can never widen access. There is deliberately **no**
 `isPaid = true` development flag that could be flipped and shipped by accident.
 
 Unpaid users may transcribe, read, edit, restyle, and export captions for their entire project. The
@@ -93,12 +148,12 @@ The timeline still represents the whole video and shades the protected region. S
 past the boundary still selects and edits that caption; it simply does not move the protected
 playhead there.
 
-### This is not a security boundary
+### This is still not a security boundary
 
-The frontend must never be the component that decides whether someone has paid. When accounts and
-billing are implemented, the **backend** must determine entitlement from the authenticated
-account's subscription and return it; the client then reflects that instead of assuming the free
-tier. Until that endpoint exists this module is UX-level only.
+The frontend must never be the component that decides whether someone paid. The browser check is a
+UX gate. When Stripe arrives, the **backend** must determine entitlement from the authenticated
+account's subscription, and the client will merely reflect that. Until then, the client assumes the
+more restrictive answer whenever it is unsure.
 
 ## Tech stack
 
@@ -119,14 +174,23 @@ tier. Until that endpoint exists this module is UX-level only.
 ├── .env.example                # VITE_API_URL for the frontend
 ├── .env.local                  # local overrides (git-ignored)
 ├── README.md
-├── backend/                    # Phase 2 transcription service
+├── backend/                    # Phase 2/3 service
+│   ├── alembic/                # Migration environment + revisions
+│   ├── alembic.ini
 │   ├── app/
-│   │   ├── main.py             # FastAPI app, CORS, health, /api/transcribe
-│   │   ├── config.py           # Env-driven settings + device resolution
-│   │   ├── schemas.py          # Captionline response models
-│   │   └── transcribe.py       # WhisperX lifecycle + output normalization
+│   │   ├── main.py             # FastAPI app, CORS, health, transcribe
+│   │   ├── config.py           # Env-driven settings
+│   │   ├── schemas.py          # Transcription response models
+│   │   ├── transcribe.py       # WhisperX lifecycle + output normalization
+│   │   ├── plans.py            # Free plan defaults (single source of truth)
+│   │   ├── usage.py            # Usage periods, snapshots, entitlement
+│   │   ├── db/                 # SQLAlchemy base, models, session
+│   │   ├── routers/            # auth.py, account.py
+│   │   └── security/           # Argon2id, tokens, dependencies, schemas
+│   ├── tests/                  # pytest suite
 │   ├── requirements.txt
 │   ├── requirements.lock.txt
+│   ├── pytest.ini
 │   ├── Dockerfile
 │   └── README.md
 └── src/
@@ -134,14 +198,18 @@ tier. Until that endpoint exists this module is UX-level only.
     ├── App.tsx                   # Stage machine: landing -> processing -> editor
     ├── index.css                 # Design tokens and all styles
     ├── types.ts                  # CaptionCue, CaptionWord, the CaptionStyle model
-    ├── entitlement.ts            # Preview entitlement policy (free tier = 30s preview)
+    ├── entitlement.ts            # Preview entitlement policy + server bridge
     ├── vite-env.d.ts             # VITE_API_URL typing
+    ├── auth/
+    │   ├── AuthContext.tsx       # Session state + resolved entitlement
+    │   └── AccountPanel.tsx      # Sign up / log in / usage
     ├── data/
-    │   ├── sampleCaptions.ts     # Phase 1 fallback caption track
+    │   ├── sampleCaptions.ts     # Local fallback caption track
     │   ├── captionFonts.ts       # Font id -> CSS stack registry
     │   └── captionPresets.ts     # One-click CaptionStyle presets
     ├── lib/
     │   ├── api.ts                # Transcription client + response -> cue mapping
+    │   ├── auth.ts               # Account API client + token storage
     │   ├── srt.ts                # .srt generation + client-side download
     │   ├── color.ts              # Hex validation / alpha conversion
     │   ├── text.ts               # Greedy caption line/word wrapping
@@ -224,6 +292,28 @@ python3.12 -m venv .venv
 source .venv/bin/activate           # macOS / Linux
 
 pip install -r requirements.txt
+```
+
+### Database
+
+`DATABASE_URL` is the only database setting, and it is optional. Without it the service still starts
+and transcribes, `/api/health` reports `database.status = "not_configured"`, and the account
+endpoints return `503` — so transcription-only local work is unaffected.
+
+```bash
+# Local PostgreSQL
+export DATABASE_URL=postgresql://captionline:<your-local-password>@localhost:5432/captionline
+
+# Local without PostgreSQL (development and tests only)
+export DATABASE_URL=sqlite:///./captionline.db
+```
+
+`postgres://` and `postgresql://` are both accepted and normalised automatically.
+
+Apply migrations and run:
+
+```bash
+alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -233,7 +323,14 @@ Check it:
 curl http://localhost:8000/api/health
 ```
 
-Full backend documentation, model configuration, and GPU notes:
+Run the backend tests (they use the real migration against a temporary SQLite database, so no
+PostgreSQL server is needed):
+
+```bash
+pytest
+```
+
+Full backend documentation, model configuration, and Railway deployment:
 [`backend/README.md`](backend/README.md).
 
 ## Production build
@@ -262,34 +359,60 @@ Only `VITE_`-prefixed variables reach the browser bundle, so no secret ever belo
 
 ### Backend
 
-Server-side configuration lives in `backend/.env.example`: `WHISPERX_MODEL`, `WHISPERX_DEVICE`,
-`WHISPERX_COMPUTE_TYPE`, `WHISPERX_BATCH_SIZE`, `CORS_ORIGINS`, `MAX_UPLOAD_MB`, `PORT`, and
-`PRELOAD_MODEL`. These must **not** be prefixed with `VITE_`.
+Server-side configuration lives in `backend/.env.example`:
+
+| Variable | Purpose |
+| -------- | ------- |
+| `DATABASE_URL` | PostgreSQL in production (`${{Postgres.DATABASE_URL}}`), optional locally |
+| `SESSION_TTL_DAYS` | Bearer session lifetime |
+| `MIN_PASSWORD_LENGTH` | Minimum registration password length |
+| `WHISPERX_MODEL` | Transcription model |
+| `WHISPERX_DEVICE` | `auto` (CUDA when available) or `cpu` |
+| `CORS_ORIGINS` | Comma-separated allowed origins |
+| `MAX_UPLOAD_MB` | Upload size limit |
+| `PORT` | Supplied by Railway |
+
+These must **not** be prefixed with `VITE_`. `DATABASE_URL` is the only secret, and the platform
+supplies it.
 
 ## Railway deployment
 
-The backend is Railway-ready: it binds `0.0.0.0`, reads `PORT`, uses temporary storage only, and
-contains no Windows-specific behavior. `backend/Dockerfile` is a CPU image with `ffmpeg` installed
-and a container-aware start command.
+```
+Captionline Web  →  Captionline API  →  PostgreSQL
+```
 
-Set on the Railway service:
+The backend is Railway-ready: it binds `0.0.0.0`, reads `PORT`, uses temporary storage only, and
+contains no Windows-specific behavior. `backend/Dockerfile` is a CPU image with `ffmpeg`, `libgomp1`,
+and `libpq5` installed. Its start command applies migrations before serving:
 
 ```
+alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+Set on the Railway API service:
+
+```
+DATABASE_URL=${{Postgres.DATABASE_URL}}
 WHISPERX_MODEL=small
 WHISPERX_DEVICE=cpu
 WHISPERX_COMPUTE_TYPE=int8
 CORS_ORIGINS=https://<your-frontend-domain>
 MAX_UPLOAD_MB=500
+SESSION_TTL_DAYS=30
 ```
 
 Then set `VITE_API_URL` on the frontend to the Railway backend URL and rebuild the frontend. No
 source change is needed to switch environments.
 
-**Not yet done:** nothing has been deployed, no Railway resources were created, and no GPU
-infrastructure was provisioned. See the size and timeout caveats in `backend/README.md`.
+**Migration safety:** the schema is only ever changed by a reviewed Alembic revision. `create_all`
+is never used against a live database, so a deploy cannot silently reshape a table.
+
+**Not yet done:** no Stripe, no usage enforcement on transcription, and no GPU infrastructure
+provisioned. See the size and timeout caveats in `backend/README.md`.
 
 ## Git
 
 - Phase 1 lives on `phase-1-foundation` (committed as `542f718`).
-- Phase 2 work is on `phase-2-transcription`.
+- Phase 2 lives on `phase-2-transcription` (committed as `460a53a`).
+- Phase 3A work is on `phase-3-accounts`.
 - `main` is untouched.

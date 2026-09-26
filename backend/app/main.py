@@ -25,7 +25,9 @@ from starlette.concurrency import run_in_threadpool
 
 from . import __version__
 from .config import get_settings
-from .schemas import HealthResponse, TranscriptionResponse
+from .db.session import is_configured
+from .routers import account, auth
+from .schemas import DatabaseHealth, HealthResponse, TranscriptionResponse
 from .transcribe import (
     ModelUnavailableError,
     cuda_available,
@@ -99,6 +101,37 @@ else:
         allow_headers=["*"],
     )
 
+app.include_router(auth.router)
+app.include_router(account.router)
+
+
+def _database_health() -> DatabaseHealth:
+    """Report database reachability without exposing any connection detail."""
+    if not is_configured():
+        return DatabaseHealth(configured=False, reachable=False, status="not_configured")
+
+    from sqlalchemy import text
+
+    from .db.session import get_session_factory
+
+    factory = get_session_factory()
+
+    if factory is None:
+        return DatabaseHealth(configured=True, reachable=False, status="error")
+
+    try:
+        session = factory()
+        try:
+            session.execute(text("SELECT 1"))
+        finally:
+            session.close()
+    except Exception as exc:
+        # Log the detail, return only the coarse status.
+        logger.warning("Database health check failed: %s", exc)
+        return DatabaseHealth(configured=True, reachable=False, status="error")
+
+    return DatabaseHealth(configured=True, reachable=True, status="ok")
+
 
 def _looks_like_media(filename: str, content_type: str | None) -> bool:
     suffix = os.path.splitext(filename)[1].lower()
@@ -139,7 +172,12 @@ async def _save_upload(upload: UploadFile, destination: str, limit: int) -> int:
 
 @app.get("/api/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """Liveness/readiness probe used by Railway and local checks."""
+    """Liveness/readiness probe used by Railway and local checks.
+
+    Reports database reachability as a coarse status only. The connection string
+    is never included, and connection errors are logged server-side rather than
+    returned, so credentials cannot leak through this endpoint.
+    """
     state = model_state(settings)
 
     return HealthResponse(
@@ -152,6 +190,7 @@ async def health() -> HealthResponse:
         model_loaded=bool(state["loaded"]),
         alignment_enabled=settings.whisperx_align_enabled,
         cuda_available=cuda_available(),
+        database=_database_health(),
     )
 
 

@@ -21,6 +21,12 @@ env/
 models/
 .cache/
 
+# Local development SQLite databases (see DATABASE_URL=sqlite:///./captionline.db)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
 # OS
 .DS_Store
 Thumbs.db

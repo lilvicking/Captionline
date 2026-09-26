@@ -97,8 +97,8 @@ export function ProcessingState({ fileName, job, onContinue }: ProcessingStatePr
           <p className="processing__note">
             <Info size={16} aria-hidden="true" />
             <span>
-              Transcription runs on the Captionline service using WhisperX. The video itself is not
-              stored anywhere.
+              Transcription runs on the Captionline service using WhisperX. The uploaded file is
+              deleted as soon as it has been transcribed.
             </span>
           </p>
         )}

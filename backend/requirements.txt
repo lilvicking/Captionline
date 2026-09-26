@@ -7,7 +7,21 @@
 # WhisperX pulls in faster-whisper (the CTranslate2 backend), torch, torchaudio,
 # pyannote.audio and ctranslate2. No WhisperX source is vendored into this repo.
 
+# --- Transcription ---
 fastapi
 uvicorn[standard]
 python-multipart
 whisperx
+
+# --- Accounts / database (Phase 3A) ---
+# SQLAlchemy 2.0 typed ORM, Alembic for migrations, psycopg 3 driver for
+# PostgreSQL, and email validation for the account API.
+SQLAlchemy>=2.0
+alembic
+psycopg[binary]
+argon2-cffi
+email-validator
+
+# --- Tests (safe to omit in a production image) ---
+pytest
+httpx

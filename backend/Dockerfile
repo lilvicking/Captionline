@@ -18,9 +18,10 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # ffmpeg is required by WhisperX/faster-whisper to decode uploaded media.
-# libgomp1 is needed by torch CPU kernels.
+# libgomp1 is needed by torch CPU kernels. libpq is the PostgreSQL client
+# library used by psycopg.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg libgomp1 \
+    && apt-get install -y --no-install-recommends ffmpeg libgomp1 libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -30,8 +31,14 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
 
 EXPOSE 8000
 
-# Container-aware: honours the PORT variable supplied by Railway.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Apply migrations, then serve. Runs on every deploy so a new revision is applied
+# before traffic arrives. Fails fast if DATABASE_URL is missing or unreachable.
+#
+# Migrations are NOT run on import or via create_all: the schema is only ever
+# changed by a reviewed Alembic revision.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

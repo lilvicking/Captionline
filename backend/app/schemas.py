@@ -43,6 +43,18 @@ class TranscriptionResponse(BaseModel):
     word_aligned: bool = True
 
 
+class DatabaseHealth(BaseModel):
+    """Database reachability, with no connection string or credentials.
+
+    Only booleans and a coarse status are exposed.
+    """
+
+    configured: bool
+    reachable: bool
+    # "not_configured" | "ok" | "error"
+    status: str
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -53,3 +65,4 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     alignment_enabled: bool
     cuda_available: bool
+    database: DatabaseHealth | None = None

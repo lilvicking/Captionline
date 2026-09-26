@@ -16,8 +16,11 @@ export type CaptionCue = {
   end: number;
   text: string;
   /**
-   * Word-level timing, present when the transcription service returned aligned
-   * words. Drives karaoke and active-word highlighting.
+   * Drives karaoke and active-word highlighting.
+   *
+   * Populated by the transcription service. Absent when captions came from the
+   * local sample track, in which case no word timing exists and highlighting
+   * stays off. Timings are never synthesised.
    */
   words?: CaptionWord[];
 };

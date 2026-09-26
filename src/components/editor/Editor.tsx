@@ -4,7 +4,8 @@ import { ArrowLeft, Info } from "lucide-react";
 import { DEFAULT_CAPTION_STYLE } from "../../types";
 import type { CaptionCue, CaptionStyle } from "../../types";
 import type { TranscriptionMeta } from "../../App";
-import { canPreviewAt, resolvePreviewEntitlement } from "../../entitlement";
+import { canPreviewAt } from "../../entitlement";
+import { useAuth } from "../../auth/AuthContext";
 import { CaptionDesigner } from "./CaptionDesigner";
 import { CaptionTrack } from "./CaptionTrack";
 import { ExportPanel } from "./ExportPanel";
@@ -37,7 +38,9 @@ export function Editor({
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
   const [isPreviewLocked, setIsPreviewLocked] = useState(false);
 
-  const entitlement = useMemo(() => resolvePreviewEntitlement(), []);
+  // Server-authoritative when signed in; the free tier otherwise. Never widens
+  // preview access on its own.
+  const { entitlement } = useAuth();
 
   const playingCue = useMemo(
     () => cues.find((cue) => currentTime >= cue.start && currentTime < cue.end) ?? null,

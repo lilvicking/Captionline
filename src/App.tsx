@@ -6,6 +6,7 @@ import { Nav } from "./components/Nav";
 import { Pricing } from "./components/Pricing";
 import { ProcessingState, type TranscriptionJob } from "./components/ProcessingState";
 import { Editor } from "./components/editor/Editor";
+import { AccountPanel } from "./auth/AccountPanel";
 import { createSampleCues } from "./data/sampleCaptions";
 import { API_BASE_URL, segmentsToCues, transcribeFile } from "./lib/api";
 import type { CaptionCue } from "./types";
@@ -32,6 +33,7 @@ export function App() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [job, setJob] = useState<TranscriptionJob | null>(null);
   const [meta, setMeta] = useState<TranscriptionMeta>({ source: "sample", wordAligned: false });
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
 
   const objectUrlRef = useRef<string | null>(null);
 
@@ -186,7 +188,7 @@ export function App() {
 
   return (
     <div className="app">
-      <Nav onStartUpload={focusUploadZone} />
+      <Nav onStartUpload={focusUploadZone} onOpenAccount={() => setIsAccountOpen(true)} />
 
       <main>
         <div id="upload">
@@ -197,6 +199,8 @@ export function App() {
       </main>
 
       <Footer />
+
+      {isAccountOpen ? <AccountPanel onClose={() => setIsAccountOpen(false)} /> : null}
     </div>
   );
 }

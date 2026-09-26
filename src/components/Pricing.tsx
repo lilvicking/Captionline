@@ -25,8 +25,8 @@ export function Pricing() {
           <p className="eyebrow">Pricing</p>
           <h2 className="section__title">Plans are still being finalised</h2>
           <p className="section__lede">
-            Phase 1 is a preview build, so there is nothing to pay for yet. Final plans and prices
-            will be announced before launch.
+            Captionline is in preview, so there is nothing to pay for yet. Accounts start on the Free
+            plan and final plans and prices will be announced before launch.
           </p>
         </header>
 

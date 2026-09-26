@@ -105,6 +105,19 @@ class Settings:
     # Loads WhisperX eagerly at startup instead of on the first request.
     preload_model: bool = field(default_factory=lambda: _env_bool("PRELOAD_MODEL", False))
 
+    # --- Database ---------------------------------------------------------
+    # Provided by Railway as DATABASE_URL. Optional: without it the service
+    # still runs and transcribes, and the account endpoints report that the
+    # database is unavailable.
+    database_url: str | None = field(default_factory=lambda: _env_optional("DATABASE_URL"))
+    database_echo: bool = field(default_factory=lambda: _env_bool("DATABASE_ECHO", False))
+
+    # --- Authentication ---------------------------------------------------
+    # Lifetime of an issued bearer session, in days.
+    session_ttl_days: int = field(default_factory=lambda: _env_int("SESSION_TTL_DAYS", 30))
+    # Minimum accepted password length for registration.
+    min_password_length: int = field(default_factory=lambda: _env_int("MIN_PASSWORD_LENGTH", 8))
+
     @property
     def cors_allows_any(self) -> bool:
         return "*" in self.cors_origins

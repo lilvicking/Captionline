@@ -1,10 +1,14 @@
-import { Upload } from "lucide-react";
+import { Upload, UserRound } from "lucide-react";
+import { useAuth } from "../auth/AuthContext";
 
 type NavProps = {
   onStartUpload: () => void;
+  onOpenAccount: () => void;
 };
 
-export function Nav({ onStartUpload }: NavProps) {
+export function Nav({ onStartUpload, onOpenAccount }: NavProps) {
+  const { status, user } = useAuth();
+
   return (
     <header className="nav">
       <div className="nav__inner">
@@ -18,10 +22,28 @@ export function Nav({ onStartUpload }: NavProps) {
           <a href="#pricing">Pricing</a>
         </nav>
 
-        <button className="button button--primary button--sm" type="button" onClick={onStartUpload}>
-          <Upload size={16} aria-hidden="true" />
-          Upload video
-        </button>
+        <div className="nav__actions">
+          <button
+            className="button button--ghost button--sm"
+            type="button"
+            onClick={onOpenAccount}
+            aria-label={user ? `Account: ${user.email}` : "Sign in or create an account"}
+          >
+            <UserRound size={16} aria-hidden="true" />
+            <span className="nav__account-label">
+              {status === "authenticated" && user ? user.email : "Account"}
+            </span>
+          </button>
+
+          <button
+            className="button button--primary button--sm"
+            type="button"
+            onClick={onStartUpload}
+          >
+            <Upload size={16} aria-hidden="true" />
+            Upload video
+          </button>
+        </div>
       </div>
     </header>
   );
