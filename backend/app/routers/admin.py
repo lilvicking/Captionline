@@ -357,6 +357,14 @@ def adjust_credit(
     A separate audit row is written for every adjustment rather than rewriting a
     balance, so the history stays truthful. The balance is never allowed to go
     below zero.
+
+    An administrator may adjust their own account, so the owner can grant
+    themselves credit for testing, QA, or demonstrations. That is an intentional
+    exception to the usual support flow, and it is only reachable by an
+    authenticated administrator: `require_admin` still guards this route, so a
+    normal user adjusting either themselves or anyone else is still refused. The
+    adjustment is still reasoned, confirmed, and audited, and for a self-adjustment
+    the audit row simply has the same id in both columns.
     """
     reason = payload.reason.strip()
 
@@ -375,14 +383,6 @@ def adjust_credit(
         )
 
     target = _require_user(db, user_id)
-
-    # An administrator cannot adjust their own credit: self-granting would be a
-    # way to manufacture usage outside the audited support process.
-    if target.id == admin.id:
-        raise HTTPException(
-            status_code=400,
-            detail="You cannot adjust your own processing credit.",
-        )
 
     current = max(int(target.bonus_processing_seconds or 0), 0)
 

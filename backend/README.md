@@ -271,8 +271,13 @@ model through cannot leak one, and a test asserts the forbidden key names are ab
 
 Requires an administrator. Body `{"minutes": 30, "reason": "Transcription issue"}`. A positive
 value grants credit, a negative value corrects a previous grant. The reason is mandatory and the
-adjustment is capped at 24 hours. **An administrator cannot adjust their own credit**, because
-self-granting would manufacture usage outside the audited support process.
+adjustment is capped at 24 hours.
+
+**An administrator may adjust their own account**, so the owner can grant themselves credit for
+testing, production QA, internal usage, or demonstrations. This is intentional and does not weaken
+the guard: `require_admin` still gates the route, so a normal user adjusting either themselves or
+anyone else is still refused, and a self-adjustment is still reasoned, confirmed, and audited — the
+audit row simply carries the same id in both the admin and target columns.
 
 ### `GET /api/admin/users/{id}/audit`
 

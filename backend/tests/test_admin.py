@@ -364,6 +364,7 @@ def test_no_endpoint_lets_a_user_promote_themselves(client, db_session):
     ]
 
     # The only POST is the credit adjustment, whose body model forbids is_admin.
+    # It is the one route an administrator may point at their own account.
     assert [path for path, _ in write_paths] == ["/api/admin/users/{user_id}/credits"]
 
     # And posting is_admin to it is rejected by validation, not ignored.
@@ -652,8 +653,102 @@ def test_audit_endpoint_lists_history(client, db_session):
     assert audit[0]["admin_email"] == ADMIN_EMAIL
 
 
-def test_cannot_adjust_your_own_credit(client, db_session):
-    """Self-granting would manufacture usage outside the audited process."""
+def test_admin_may_grant_credit_to_their_own_account(client, db_session):
+    """The owner grants themselves credit for testing and demonstrations.
+
+    Intentionally permitted. It is still an authenticated administrator action, so
+    `require_admin` continues to gate the route, and it is still audited.
+    """
+    admin_token = make_admin(client)
+    admin = db_session.execute(
+        select(User).where(User.email == ADMIN_EMAIL)
+    ).scalar_one()
+
+    before = client.get(
+        f"/api/admin/users/{admin.id}", headers=auth_header(admin_token)
+    ).json()
+
+    response = client.post(
+        f"/api/admin/users/{admin.id}/credits",
+        json={"minutes": 120, "reason": "Production QA and demos"},
+        headers=auth_header(admin_token),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    # +120 minutes of credit.
+    assert body["bonus_processing_seconds"] == 7200
+    # The plan allowance is untouched by a credit.
+    assert body["monthly_processing_allowance_seconds"] == before[
+        "monthly_processing_allowance_seconds"
+    ]
+    # And so is recorded usage.
+    assert body["processing_used_seconds"] == before["processing_used_seconds"]
+    assert body["processing_remaining_seconds"] == before[
+        "monthly_processing_allowance_seconds"
+    ] + 7200
+
+    db_session.refresh(admin)
+    assert admin.bonus_processing_seconds == 7200
+    assert admin.processing_used_seconds == 0
+    assert admin.monthly_processing_allowance_seconds == 600
+
+
+def test_self_adjustment_is_audited_with_one_admin_and_one_target(client, db_session):
+    """For a self-adjustment, admin and target are the same id, and that is expected."""
+    admin_token = make_admin(client)
+    admin = db_session.execute(
+        select(User).where(User.email == ADMIN_EMAIL)
+    ).scalar_one()
+
+    client.post(
+        f"/api/admin/users/{admin.id}/credits",
+        json={"minutes": 30, "reason": "Demonstration run"},
+        headers=auth_header(admin_token),
+    )
+
+    entry = db_session.execute(select(AdminAuditEntry)).scalars().all()
+
+    assert len(entry) == 1
+    assert entry[0].admin_user_id == admin.id
+    assert entry[0].target_user_id == admin.id
+    assert entry[0].action == ACTION_CREDIT_GRANTED
+    assert entry[0].amount_seconds == 1800
+    assert entry[0].reason == "Demonstration run"
+    assert entry[0].created_at is not None
+
+    # And it shows up in the account's own history.
+    audit = client.get(
+        f"/api/admin/users/{admin.id}/audit", headers=auth_header(admin_token)
+    ).json()
+    assert len(audit) == 1
+    assert audit[0]["admin_email"] == ADMIN_EMAIL
+
+
+def test_admin_may_correct_their_own_credit(client, db_session):
+    admin_token = make_admin(client)
+    admin = db_session.execute(
+        select(User).where(User.email == ADMIN_EMAIL)
+    ).scalar_one()
+
+    client.post(
+        f"/api/admin/users/{admin.id}/credits",
+        json={"minutes": 60, "reason": "Grant"},
+        headers=auth_header(admin_token),
+    )
+    response = client.post(
+        f"/api/admin/users/{admin.id}/credits",
+        json={"minutes": -10, "reason": "Mistake"},
+        headers=auth_header(admin_token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["bonus_processing_seconds"] == 3000
+
+
+def test_self_correction_beyond_the_balance_is_refused(client, db_session):
+    """The zero floor applies to self-adjustment exactly as it does to anyone else."""
     admin_token = make_admin(client)
     admin = db_session.execute(
         select(User).where(User.email == ADMIN_EMAIL)
@@ -661,10 +756,70 @@ def test_cannot_adjust_your_own_credit(client, db_session):
 
     response = client.post(
         f"/api/admin/users/{admin.id}/credits",
-        json={"minutes": 600, "reason": "self grant"},
+        json={"minutes": -30, "reason": "Over-correct"},
         headers=auth_header(admin_token),
     )
+
     assert response.status_code == 400
+    assert "below zero" in response.json()["detail"]
+
+    db_session.refresh(admin)
+    assert admin.bonus_processing_seconds == 0
+
+
+def test_self_adjustment_still_requires_a_reason(client, db_session):
+    admin_token = make_admin(client)
+    admin = db_session.execute(
+        select(User).where(User.email == ADMIN_EMAIL)
+    ).scalar_one()
+
+    response = client.post(
+        f"/api/admin/users/{admin.id}/credits",
+        json={"minutes": 30, "reason": ""},
+        headers=auth_header(admin_token),
+    )
+
+    assert response.status_code == 422
+
+
+def test_normal_user_still_cannot_adjust_own_account(client, db_session):
+    """A normal user adjusting themselves remains forbidden.
+
+    This is the distinction that matters: the relaxation is for administrators
+    only, so a non-administrator cannot grant themselves credit.
+    """
+    token = client.post(
+        "/api/auth/register", json={"email": "selfserve@example.com", "password": PASSWORD}
+    ).json()["access_token"]
+
+    user = db_session.execute(
+        select(User).where(User.email == "selfserve@example.com")
+    ).scalar_one()
+
+    own = client.post(
+        f"/api/admin/users/{user.id}/credits",
+        json={"minutes": 9999, "reason": "give myself more"},
+        headers=auth_header(token),
+    )
+    other = client.post(
+        "/api/admin/users/1/credits",
+        json={"minutes": 9999, "reason": "give myself more"},
+        headers=auth_header(token),
+    )
+
+    assert own.status_code == 403
+    assert other.status_code == 403
+
+    db_session.refresh(user)
+    assert user.bonus_processing_seconds == 0
+
+
+def test_anonymous_cannot_adjust_any_account(client, db_session):
+    client.post("/api/auth/register", json={"email": FREE_EMAIL, "password": PASSWORD})
+
+    assert client.post(
+        "/api/admin/users/1/credits", json={"minutes": 10, "reason": "x"}
+    ).status_code == 401
 
 
 def test_reason_is_required(client, db_session):
