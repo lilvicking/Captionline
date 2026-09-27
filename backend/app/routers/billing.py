@@ -8,6 +8,7 @@ anything on its own.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -42,6 +43,56 @@ router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 INVALID_PLAN = "That plan is not available."
 WEBHOOK_SIGNATURE_INVALID = "Invalid Stripe signature."
+
+#: Stripe error messages can echo request data, so anything that looks like a
+#: credential, a card number, or a token is redacted before it reaches the logs.
+#: Truncation alone is not enough: Stripe routinely puts the offending value in
+#: the first sentence (for example "Invalid API Key provided: sk_live_...").
+_REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]+"), "[REDACTED_STRIPE_KEY]"),
+    (re.compile(r"\bwhsec_[A-Za-z0-9]+"), "[REDACTED_WEBHOOK_SECRET]"),
+    (re.compile(r"\bBearer\s+[A-Za-z0-9._\-]+"), "Bearer [REDACTED_TOKEN]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"), "[REDACTED_JWT]"),
+    (re.compile(r"\b(?:\d[ -]?){13,19}\b"), "[REDACTED_CARD]"),
+    (re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), "[REDACTED_EMAIL]"),
+)
+
+_SAFE_MESSAGE_CHARS = 200
+
+
+def _safe_stripe_message(exc: Exception) -> str:
+    """Reduce an SDK exception to something safe to write to logs.
+
+    Keeps the exception class and a short leading clause, after redacting
+    anything that looks like a secret key, webhook secret, bearer token, JWT,
+    card number, or email address. The public API response is unaffected.
+    """
+    message = str(exc).strip()
+
+    for pattern, replacement in _REDACTIONS:
+        message = pattern.sub(replacement, message)
+
+    for separator in (". ", "\n"):
+        index = message.find(separator)
+        if index != -1:
+            message = message[:index]
+
+    message = message[:_SAFE_MESSAGE_CHARS]
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
+def _log_stripe_failure(operation: str, plan_id: str | None, exc: Exception) -> None:
+    """Log a Stripe SDK failure with enough detail to diagnose it.
+
+    Deliberately logs only the operation, the internal plan id, the exception
+    class, and a sanitized message. No key, token, or customer data.
+    """
+    logger.warning(
+        "Stripe %s failed (plan=%s): %s",
+        operation,
+        plan_id or "n/a",
+        _safe_stripe_message(exc),
+    )
 
 
 class CheckoutRequest(BaseModel):
@@ -81,7 +132,7 @@ def create_checkout(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
     except Exception as exc:  # pragma: no cover - network/upstream failure
-        logger.warning("Stripe checkout failed for plan %s: %s", payload.plan, type(exc).__name__)
+        _log_stripe_failure("checkout", payload.plan, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Checkout is temporarily unavailable. Please try again.",
@@ -119,7 +170,7 @@ def create_portal(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
     except Exception as exc:  # pragma: no cover
-        logger.warning("Stripe portal failed: %s", type(exc).__name__)
+        _log_stripe_failure("portal", user.plan, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The billing portal is temporarily unavailable.",

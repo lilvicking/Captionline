@@ -133,7 +133,11 @@ def build_checkout_session(
         # records the resulting customer id on the account.
         params["customer_email"] = customer_email
 
-    session = client.checkout.sessions.create(**params)
+    # The typed params object must be passed as ONE positional argument.
+    # Expanding the dict into keywords raises
+    # "TypeError: SessionService.create() got an unexpected keyword argument 'mode'",
+    # because the signature is create(params, options).
+    session = client.v1.checkout.sessions.create(params)
 
     return {
         "id": session.id,
@@ -147,9 +151,9 @@ def build_portal_session(
     """Create a Stripe Customer Portal session for an existing subscriber."""
     client = require_stripe_client()
 
-    session = client.billing_portal.sessions.create(
-        customer=customer_id,
-        return_url=return_url,
+    # Same positional-params rule as checkout, see build_checkout_session.
+    session = client.v1.billing_portal.sessions.create(
+        {"customer": customer_id, "return_url": return_url}
     )
 
     return {"url": session.url}
