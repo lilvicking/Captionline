@@ -18,6 +18,7 @@ import {
   HOME_PATH,
   navigateTo,
   PRIVACY_PATH,
+  PRICING_PATH,
   RESET_PASSWORD_PATH,
   TERMS_PATH,
   usePathname,
@@ -65,6 +66,25 @@ function LandingSeo() {
       [],
     ),
   });
+
+  return null;
+}
+
+/**
+ * Sends /pricing to the landing page's pricing section.
+ *
+ * Navigation happens in an effect rather than during render, so it runs once
+ * rather than on every re-render. The scroll is deferred because the section
+ * only exists after the landing page has mounted.
+ */
+function PricingRedirect() {
+  useEffect(() => {
+    navigateTo(HOME_PATH);
+    const timer = window.setTimeout(() => {
+      document.getElementById("pricing")?.scrollIntoView({ block: "start" });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   return null;
 }
@@ -326,6 +346,12 @@ export function App() {
 
   if (pathname === CAPTION_GENERATOR_PATH) {
     return secondaryPage(<CaptionGeneratorPage />);
+  }
+
+  // /pricing is advertised in the sitemap and linked from the landing page, so
+  // it has to land on the plans rather than the not-found page.
+  if (pathname === PRICING_PATH) {
+    return <PricingRedirect />;
   }
 
   // An unknown path must not fall through to the landing page: the URL would

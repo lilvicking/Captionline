@@ -21,6 +21,12 @@ export const CONTACT_PATH = "/contact";
 /** The search-facing landing page. Indexed, and linked from the footer and nav. */
 export const CAPTION_GENERATOR_PATH = "/caption-generator";
 /**
+ * Pricing lives as a section on the landing page, but it is advertised in the
+ * sitemap, so it needs a real URL that lands on the plans rather than the
+ * not-found page.
+ */
+export const PRICING_PATH = "/pricing";
+/**
  * The support console. Deliberately absent from customer navigation: the entry
  * point is a small link inside the Account sheet, shown only to accounts the
  * server reports as administrators.

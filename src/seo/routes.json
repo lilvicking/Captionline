@@ -1,0 +1,37 @@
+{
+  "$comment": "Single source of truth for public route metadata. Read by the React app (src/seo/meta.ts) and by the post-build prerender script (scripts/prerender.mjs), so the served HTML and the client-side metadata can never drift apart. Private routes are deliberately absent and stay noindex.",
+  "ogImage": "/og-image.png",
+  "siteName": "Captionline",
+  "routes": {
+    "/": {
+      "title": "Captionline — Automatic video captions, styled and exported",
+      "description": "Automatic video captions and subtitles: generate them from your audio, edit and style them, download an SRT file, or export a finished captioned MP4. Free plan includes 10 processing minutes a month.",
+      "index": true
+    },
+    "/caption-generator": {
+      "title": "Free AI Caption Generator for Video",
+      "description": "Generate video captions automatically, edit them, style them, and export an SRT file or a finished captioned MP4. Free plan includes 10 processing minutes per month.",
+      "index": true
+    },
+    "/pricing": {
+      "title": "Pricing and monthly processing allowances",
+      "description": "Captionline plans: free with 10 processing minutes a month, Creator with 500 minutes, Pro with 1,500 minutes. Every plan includes caption editing, styling, preview, SRT download and finished MP4 export.",
+      "index": true
+    },
+    "/terms": {
+      "title": "Terms of Service",
+      "description": "Terms of Service for Captionline: plans, processing allowances, ownership of uploaded media, refunds, and liability.",
+      "index": true
+    },
+    "/privacy": {
+      "title": "Privacy Policy",
+      "description": "How Captionline handles your account, uploaded media, transcripts, usage records, payments, and password reset emails.",
+      "index": true
+    },
+    "/contact": {
+      "title": "Contact and support",
+      "description": "Support and contact information for Captionline.",
+      "index": true
+    }
+  }
+}

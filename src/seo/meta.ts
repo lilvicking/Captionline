@@ -12,16 +12,37 @@
 
 import { useEffect } from "react";
 import { absoluteUrl, SITE_NAME } from "./site";
+import routeData from "./routes.json";
+
+/**
+ * Per-route metadata, read from the same JSON the post-build prerender script
+ * consumes, so the served HTML and the client-updated tags cannot drift.
+ */
+const PUBLIC_ROUTES = routeData.routes as Record<
+  string,
+  { title: string; description: string; index: boolean }
+>;
 
 export type PageMeta = {
-  title: string;
-  description: string;
+  /** Defaults to the shared entry for this path when omitted. */
+  title?: string;
+  description?: string;
   path: string;
   /** JSON-LD documents to attach to the page. */
   structuredData?: Record<string, unknown>[];
   /** Defaults to indexing. Set false for private or single-use routes. */
   index?: boolean;
 };
+
+/** Resolves the shared metadata for a path, if it is a public route. */
+export function publicRouteMeta(path: string) {
+  return PUBLIC_ROUTES[path] ?? null;
+}
+
+export const OG_IMAGE_PATH = routeData.ogImage;
+
+const OG_IMAGE_ALT =
+  "Captionline — automatic video captions, then edit, style and export.";
 
 function setMeta(selector: string, attribute: "name" | "property", key: string, content: string) {
   let element = document.head.querySelector<HTMLMetaElement>(selector);
@@ -56,31 +77,43 @@ function setRobots(content: string) {
  * then swaps the JSON-LD blocks for this route.
  */
 export function usePageMeta({
-  title,
-  description,
   path,
   structuredData = [],
-  index = true,
+  index,
+  title,
+  description,
 }: PageMeta): void {
   useEffect(() => {
+    const shared = publicRouteMeta(path);
+    const resolvedTitle = title ?? shared?.title ?? SITE_NAME;
+    const resolvedDescription = description ?? shared?.description ?? "";
+    const shouldIndex = index ?? shared?.index ?? false;
+
     const url = absoluteUrl(path);
-    const fullTitle = path === "/" ? title : `${title} | ${SITE_NAME}`;
+    const fullTitle = path === "/" ? resolvedTitle : `${resolvedTitle} | ${SITE_NAME}`;
+    const ogImage = absoluteUrl(OG_IMAGE_PATH);
 
     document.title = fullTitle;
 
-    setMeta('meta[name="description"]', "name", "description", description);
+    setMeta('meta[name="description"]', "name", "description", resolvedDescription);
     setCanonical(url);
-    setRobots(index ? "index, follow" : "noindex, nofollow");
+    setRobots(shouldIndex ? "index, follow" : "noindex, nofollow");
 
     setMeta("meta[property='og:type']", "property", "og:type", "website");
     setMeta("meta[property='og:site_name']", "property", "og:site_name", SITE_NAME);
     setMeta("meta[property='og:title']", "property", "og:title", fullTitle);
-    setMeta("meta[property='og:description']", "property", "og:description", description);
+    setMeta("meta[property='og:description']", "property", "og:description", resolvedDescription);
     setMeta("meta[property='og:url']", "property", "og:url", url);
+    setMeta("meta[property='og:image']", "property", "og:image", ogImage);
+    setMeta("meta[property='og:image:width']", "property", "og:image:width", "1200");
+    setMeta("meta[property='og:image:height']", "property", "og:image:height", "630");
+    setMeta("meta[property='og:image:alt']", "property", "og:image:alt", OG_IMAGE_ALT);
 
     setMeta("meta[name='twitter:card']", "name", "twitter:card", "summary_large_image");
     setMeta("meta[name='twitter:title']", "name", "twitter:title", fullTitle);
-    setMeta("meta[name='twitter:description']", "name", "twitter:description", description);
+    setMeta("meta[name='twitter:description']", "name", "twitter:description", resolvedDescription);
+    setMeta("meta[name='twitter:image']", "name", "twitter:image", ogImage);
+    setMeta("meta[name='twitter:image:alt']", "name", "twitter:image:alt", OG_IMAGE_ALT);
 
     // Replace any previous route's JSON-LD so structured data always matches the
     // visible content.

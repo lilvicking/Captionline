@@ -30,6 +30,11 @@ export const PUBLIC_ROUTES = [
 export const PRIVATE_ROUTES = ["/admin", "/reset-password", "/forgot-password"];
 
 export function absoluteUrl(path: string): string {
-  const suffix = path === "/" ? "" : path.replace(/\/+$/, "");
-  return `${SITE_URL}${suffix}`;
+  // The site root is canonically the origin with a trailing slash, so the
+  // prerendered HTML, the client-side tags, and the canonical link all agree.
+  if (path === "/" || path === "") {
+    return `${SITE_URL}/`;
+  }
+
+  return `${SITE_URL}${path.replace(/\/+$/, "")}`;
 }

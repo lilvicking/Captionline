@@ -235,21 +235,35 @@ function handle(request, response) {
   let target = resolved.filePath;
   let stats = statOrNull(target);
 
+  // Whether we end up serving an app document rather than a build artifact.
+  // Mutable because the resolution steps below reassign it.
+  let isDocument = target === INDEX;
+
   if (!stats && isDirectory(target)) {
     if (target === ROOT) {
       // The site root is the app document.
       target = INDEX;
       stats = statOrNull(INDEX);
+      isDocument = true;
     } else {
-      // Any other directory is not browsable, and must not leak an index file.
-      sendText(response, 404, "Not Found\n");
-      return;
+      // A directory present in the build output is a prerendered public route,
+      // so its index.html is the document for that path. Directories are never
+      // listed, only their index served.
+      const directoryIndex = path.join(target, "index.html");
+      const directoryStats = statOrNull(directoryIndex);
+
+      if (directoryStats) {
+        target = directoryIndex;
+        stats = directoryStats;
+        // A prerendered document must revalidate, like the site shell.
+        isDocument = true;
+      } else {
+        // A directory with no index is not browsable and must not leak one.
+        sendText(response, 404, "Not Found\n");
+        return;
+      }
     }
   }
-
-  // Whether we end up serving the app document rather than a build artifact.
-  // Mutable because the SPA-fallback branch below reassigns it.
-  let isDocument = target === INDEX;
 
   if (!stats) {
     if (isAssetRequest(pathname)) {
