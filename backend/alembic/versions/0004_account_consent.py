@@ -1,6 +1,6 @@
 """Account deletion support and legal consent capture.
 
-Revision ID: 0004_account_deletion_and_consent
+Revision ID: 0004_account_consent
 Revises: 0003_password_reset
 Create Date: 2026-09-27
 
@@ -36,7 +36,14 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0004_account_deletion_and_consent"
+# Alembic stores this identifier in `alembic_version.version_num`, which on the
+# production PostgreSQL database is VARCHAR(32). The original identifier,
+# "0004_account_deletion_and_consent", was 33 characters and failed at deploy
+# time with StringDataRightTruncation, so the identifier is kept short enough to
+# fit. Renaming an unapplied revision is far cheaper than widening that column.
+# `tests/test_migrations.py` asserts every revision identifier fits, so the next
+# person to name a long revision finds out in CI rather than in production.
+revision: str = "0004_account_consent"
 down_revision: Union[str, None] = "0003_password_reset"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

@@ -1,7 +1,7 @@
 """Durable, cross-replica rate-limit counters.
 
 Revision ID: 0005_rate_limit_buckets
-Revises: 0004_account_deletion_and_consent
+Revises: 0004_account_consent
 Create Date: 2026-09-27
 
 Adds `rate_limit_buckets`, a single table holding one fixed window per
@@ -55,7 +55,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0005_rate_limit_buckets"
-down_revision: Union[str, None] = "0004_account_deletion_and_consent"
+down_revision: Union[str, None] = "0004_account_consent"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

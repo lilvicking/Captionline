@@ -315,7 +315,7 @@ migration.
 | `0001_initial_accounts` | `users`, `sessions` |
 | `0002_billing_and_usage` | `users.subscription_price_id`, `usage_reservations`, `stripe_events` |
 | `0003_password_reset` | `password_reset_tokens` |
-| `0004_account_deletion_and_consent` | four nullable consent columns on `users`. No backfill, no defaults, no `NOT NULL` |
+| `0004_account_consent` | four nullable consent columns on `users`. No backfill, no defaults, no `NOT NULL` |
 | `0005_rate_limit_buckets` | `rate_limit_buckets` |
 
 Every revision is additive, so an application rollback stays safe against a migrated schema. A
@@ -906,7 +906,7 @@ backend/
 │       ├── 0001_initial_accounts.py
 │       ├── 0002_billing_and_usage.py
 │       ├── 0003_password_reset.py
-│       ├── 0004_account_deletion_and_consent.py
+│       ├── 0004_account_consent.py
 │       └── 0005_rate_limit_buckets.py
 ├── alembic.ini                    # No connection string stored here
 ├── app/
