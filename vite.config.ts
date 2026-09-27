@@ -3,7 +3,11 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "./",
+  // Captionline is served from the domain root, so asset URLs are absolute
+  // (/assets/...). A relative base ("./") resolves against the current path,
+  // which only works for single-segment routes and would break as soon as a
+  // nested route such as /legal/terms is added.
+  base: "/",
   server: {
     port: 5173,
     watch: {
