@@ -2,6 +2,12 @@
 
 interface ImportMetaEnv {
   /**
+   * Public site origin used for canonical URLs, the sitemap and structured
+   * data. Defaults to the production domain; override for local builds.
+   */
+  readonly VITE_SITE_URL?: string;
+
+  /**
    * Base URL of the Captionline transcription service.
    *
    * Local development defaults to http://localhost:8000. In production set this

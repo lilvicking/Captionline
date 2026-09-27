@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Support and contact.
  *
  * Deliberately refuses to invent a postal address, a phone number, or a support
@@ -8,12 +8,19 @@
  */
 
 import { LifeBuoy, Mail } from "lucide-react";
+import { usePageMeta } from "../seo/meta";
 import { HOME_PATH, PRIVACY_PATH, TERMS_PATH } from "../auth/route";
 import { LegalLink, LegalPage } from "./LegalPage";
 import type { LegalSection } from "./LegalPage";
 import { SUPPORT_EMAIL, SUPPORT_EMAIL_PENDING, supportMailto } from "./config";
 
 export function ContactPage() {
+  usePageMeta({
+    title: "Contact and support",
+    description: "Support and contact information for Captionline.",
+    path: "/contact",
+  });
+
   const mailto = supportMailto();
   const hasSupportEmail = mailto !== null && SUPPORT_EMAIL !== null;
 
@@ -191,3 +198,4 @@ export function ContactPage() {
     />
   );
 }
+

@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+
+# Account state, the support console, and single-use credential pages have
+# nothing for a crawler to index, and a reset link should not circulate.
+Disallow: /admin
+Disallow: /reset-password
+Disallow: /forgot-password
+
+Sitemap: https://captionline.pro/sitemap.xml

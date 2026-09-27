@@ -1,8 +1,15 @@
 import type { MouseEvent } from "react";
-import { CONTACT_PATH, navigateTo, PRIVACY_PATH, TERMS_PATH } from "../auth/route";
+import {
+  CAPTION_GENERATOR_PATH,
+  CONTACT_PATH,
+  navigateTo,
+  PRIVACY_PATH,
+  TERMS_PATH,
+} from "../auth/route";
 
 /** Document links, in the order they are read. */
 const LINKS: { href: string; label: string }[] = [
+  { href: CAPTION_GENERATOR_PATH, label: "Caption generator" },
   { href: TERMS_PATH, label: "Terms" },
   { href: PRIVACY_PATH, label: "Privacy" },
   { href: CONTACT_PATH, label: "Contact" },

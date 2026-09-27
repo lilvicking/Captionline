@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Footer } from "./components/Footer";
 import { Hero } from "./components/Hero";
@@ -13,6 +13,7 @@ import { ResetPasswordPage } from "./auth/ResetPasswordPage";
 import { AdminPage } from "./admin/AdminPage";
 import {
   ADMIN_PATH,
+  CAPTION_GENERATOR_PATH,
   CONTACT_PATH,
   HOME_PATH,
   navigateTo,
@@ -24,6 +25,9 @@ import {
 import { ContactPage } from "./legal/ContactPage";
 import { PrivacyPage } from "./legal/PrivacyPage";
 import { TermsPage } from "./legal/TermsPage";
+import { CaptionGeneratorPage } from "./pages/CaptionGeneratorPage";
+import { usePageMeta } from "./seo/meta";
+import { softwareApplicationSchema, webSiteSchema } from "./seo/structuredData";
 import { createSampleCues } from "./data/sampleCaptions";
 import { TranscriptionError, failureReasonFor, segmentsToCues, transcribeFile } from "./lib/api";
 import { getStoredToken } from "./lib/auth";
@@ -42,6 +46,28 @@ export type TranscriptionMeta = {
   /** Set when transcription failed and sample captions were used instead. */
   error?: string;
 };
+
+export /**
+ * Metadata for the landing page.
+ *
+ * Rendered as a component rather than a bare hook call so the hook only runs
+ * while the landing page is actually mounted, and cannot overwrite the metadata
+ * another route has already set.
+ */
+function LandingSeo() {
+  usePageMeta({
+    title: "Captionline — Automatic video captions, styled and exported",
+    description:
+      "Automatic video captions and subtitles: generate them from your audio, edit and style them, download an SRT file, or export a finished captioned MP4. Free plan includes 10 processing minutes a month.",
+    path: HOME_PATH,
+    structuredData: useMemo(
+      () => [softwareApplicationSchema(HOME_PATH), webSiteSchema()],
+      [],
+    ),
+  });
+
+  return null;
+}
 
 export function App() {
   const [stage, setStage] = useState<Stage>("landing");
@@ -298,6 +324,10 @@ export function App() {
     return secondaryPage(<ContactPage />);
   }
 
+  if (pathname === CAPTION_GENERATOR_PATH) {
+    return secondaryPage(<CaptionGeneratorPage />);
+  }
+
   // An unknown path must not fall through to the landing page: the URL would
   // then be wrong while the page looked right, which is worse than saying so.
   if (pathname !== HOME_PATH) {
@@ -338,9 +368,11 @@ export function App() {
 
   return (
     <div className="app">
+      <LandingSeo />
+
       <Nav onStartUpload={focusUploadZone} onOpenAccount={openAccount} />
 
-      <main>
+      <main id="main">
         <div id="upload">
           <Hero onFile={handleFile} isAuthenticated={isAuthenticated} onRequestSignIn={openAccount} />
         </div>

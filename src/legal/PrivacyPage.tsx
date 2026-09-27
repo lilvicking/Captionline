@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Privacy Policy.
  *
  * Written against the architecture that actually exists, not an idealised one.
@@ -11,6 +11,7 @@
  * address nobody watches.
  */
 
+import { usePageMeta } from "../seo/meta";
 import { CONTACT_PATH, PRIVACY_PATH, TERMS_PATH } from "../auth/route";
 import { LegalLink, LegalPage } from "./LegalPage";
 import type { LegalSection } from "./LegalPage";
@@ -29,6 +30,20 @@ function SupportAddress() {
 }
 
 export function PrivacyPage() {
+  usePageMeta({
+    title: "Privacy Policy",
+    description:
+      "How Captionline handles your account, uploaded media, transcripts, usage records, payments, and password reset emails.",
+    path: "/privacy",
+  });
+
+  usePageMeta({
+    title: "",
+    description:
+      "How Captionline handles your account, uploaded media, transcripts, usage records, payments, and password reset emails.",
+    path: "/privacy",
+  });
+
   const sections: LegalSection[] = [
     {
       id: "scope",
@@ -452,3 +467,4 @@ export function PrivacyPage() {
     />
   );
 }
+

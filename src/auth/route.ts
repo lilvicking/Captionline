@@ -18,6 +18,8 @@ export const RESET_PASSWORD_PATH = "/reset-password";
 export const TERMS_PATH = "/terms";
 export const PRIVACY_PATH = "/privacy";
 export const CONTACT_PATH = "/contact";
+/** The search-facing landing page. Indexed, and linked from the footer and nav. */
+export const CAPTION_GENERATOR_PATH = "/caption-generator";
 /**
  * The support console. Deliberately absent from customer navigation: the entry
  * point is a small link inside the Account sheet, shown only to accounts the

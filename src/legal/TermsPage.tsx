@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Terms of Service.
  *
  * Deliberately factual. Where Captionline's operating entity, address, or
@@ -13,12 +13,20 @@
  * not implemented.
  */
 
+import { usePageMeta } from "../seo/meta";
 import { CONTACT_PATH } from "../auth/route";
 import { LegalLink, LegalPage } from "./LegalPage";
 import type { LegalSection } from "./LegalPage";
 import { GOVERNING_LAW, GOVERNING_LAW_PENDING, SUPPORT_EMAIL_PENDING } from "./config";
 
 export function TermsPage() {
+  usePageMeta({
+    title: "Terms of Service",
+    description:
+      "Terms of Service for Captionline: plans, processing allowances, ownership of uploaded media, refunds, and liability.",
+    path: "/terms",
+  });
+
   const sections: LegalSection[] = [
     {
       id: "acceptance",
@@ -533,3 +541,4 @@ export function TermsPage() {
     />
   );
 }
+
