@@ -18,6 +18,12 @@ from .tokens import hash_token
 CREDENTIALS_REQUIRED = "Not authenticated."
 INVALID_CREDENTIALS = "Invalid email or password."
 
+#: How stale `last_used_at` may get before it is written again. Committing on
+#: every authenticated request turned every read-only GET into a database write,
+#: which costs a round trip and a WAL flush per request for a field nothing
+#: reads. A minute of granularity is far finer than any use for it.
+SESSION_TOUCH_INTERVAL_SECONDS = 60
+
 
 def require_database() -> None:
     """Fail clearly when account routes are used without a database."""
@@ -95,8 +101,17 @@ def get_current_user(
     if ensure_current_usage_period(user, now):
         db.commit()
 
-    session_row.last_used_at = now
-    db.commit()
+    last_used_at = session_row.last_used_at
+
+    if last_used_at is not None and last_used_at.tzinfo is None:
+        last_used_at = last_used_at.replace(tzinfo=timezone.utc)
+
+    if (
+        last_used_at is None
+        or (now - last_used_at).total_seconds() >= SESSION_TOUCH_INTERVAL_SECONDS
+    ):
+        session_row.last_used_at = now
+        db.commit()
 
     return user
 

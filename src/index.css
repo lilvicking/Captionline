@@ -494,6 +494,14 @@ textarea {
   color: var(--gray-400);
 }
 
+/* Renewal disclosure. Kept legible rather than faint: the cadence and the
+   allowance have to be readable before the subscribe button, not after. */
+.tier__renewal {
+  font-size: 0.78rem;
+  color: var(--gray-500);
+  line-height: 1.45;
+}
+
 .tier__description {
   font-size: 0.875rem;
   color: var(--gray-500);
@@ -555,6 +563,28 @@ textarea {
   padding: 40px 0;
   color: var(--gray-400);
   font-size: 0.9rem;
+}
+
+.pricing__footnote {
+  max-width: 720px;
+  margin: 28px auto 0;
+  font-size: 0.8rem;
+  color: var(--gray-500);
+  line-height: 1.55;
+}
+
+.pricing__footnote strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.pricing__footnote a {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.pricing__footnote a:hover {
+  color: var(--red-dark);
 }
 
 .pricing__spinner {
@@ -685,6 +715,19 @@ textarea {
 .footer__note {
   font-size: 0.85rem;
   color: var(--gray-400);
+}
+
+.footer__links {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-size: 0.85rem;
+  color: var(--gray-500);
+}
+
+.footer__links a:hover {
+  color: var(--ink);
+  text-decoration: underline;
 }
 
 /* ---------- Processing ---------- */
@@ -1175,7 +1218,13 @@ textarea {
 .color__hex:focus {
   background: var(--white);
   border-color: var(--gray-400);
-  outline: none;
+}
+
+/* Same reason as .track__text: outline: none here removed the only focus
+   indicator on a text field. */
+.color__hex:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 1px;
 }
 
 .switch {
@@ -1549,7 +1598,24 @@ textarea {
   background: transparent;
   font-size: 0.875rem;
   color: var(--ink);
+  /* The wrapper draws the box, so the default outline would draw a ring around
+     the input inside a box that already has a border. focus-visible keeps the
+     global red ring, and :focus adds one for browsers that match every focus. */
   outline: none;
+}
+
+.account__input:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+.account__input:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.account__input-wrap:has(.account__input:focus-visible) {
+  border-color: var(--red);
 }
 
 .account__error {
@@ -1890,7 +1956,13 @@ textarea {
 .track__text:focus {
   background: var(--white);
   border-color: var(--gray-400);
-  outline: none;
+}
+
+/* Keyboard focus must stay visible: the rule above only changes the border for
+   every focus, so the global focus-visible ring is re-applied here. */
+.track__text:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 1px;
 }
 
 .track__delete {
@@ -1908,6 +1980,309 @@ textarea {
 .track__delete:hover {
   color: var(--red);
   background: var(--red-tint);
+}
+
+/* ---------- Legal pages ---------- */
+
+.legal {
+  background: var(--white);
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.legal__inner {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 56px 24px 64px;
+}
+
+.legal__head {
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.legal__title {
+  font-size: clamp(1.7rem, 3.6vw, 2.2rem);
+  color: var(--black);
+}
+
+.legal__lede {
+  margin-top: 14px;
+  font-size: 1rem;
+  color: var(--gray-500);
+  max-width: 620px;
+}
+
+.legal__version {
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--gray-400);
+}
+
+/* A clause that is deliberately not filled in. Styled as a neutral note rather
+   than a claim, so nobody can mistake it for a real value. */
+.legal__pending {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px dashed var(--gray-300);
+  border-radius: var(--radius-sm);
+  background: var(--gray-050);
+  font-size: 0.85rem;
+  color: var(--gray-700);
+  line-height: 1.5;
+}
+
+.legal__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 11px 14px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--gray-050);
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+
+.legal__status svg {
+  color: var(--red);
+  flex-shrink: 0;
+}
+
+.legal__status a {
+  color: var(--red-dark);
+  text-decoration: underline;
+}
+
+.legal__toc {
+  margin: 28px 0 8px;
+  padding: 18px 20px;
+  border: 1px solid var(--gray-100);
+  border-radius: var(--radius-sm);
+  background: var(--gray-050);
+}
+
+.legal__toc-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--gray-500);
+  margin-bottom: 10px;
+}
+
+.legal__toc-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 24px;
+  font-size: 0.85rem;
+  color: var(--gray-700);
+  counter-reset: none;
+}
+
+.legal__toc-list a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.legal__section {
+  padding-top: 30px;
+  scroll-margin-top: 84px;
+}
+
+.legal__heading {
+  font-size: 1.05rem;
+  color: var(--black);
+  margin-bottom: 10px;
+}
+
+.legal__prose {
+  color: var(--gray-700);
+  font-size: 0.925rem;
+  line-height: 1.65;
+}
+
+.legal__prose p + p {
+  margin-top: 12px;
+}
+
+.legal__prose ul,
+.legal__prose ol {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  list-style: revert;
+}
+
+.legal__prose li {
+  margin-bottom: 6px;
+}
+
+.legal__prose strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.legal__prose a {
+  color: var(--red-dark);
+  text-decoration: underline;
+}
+
+.legal__prose a:hover {
+  color: var(--red);
+}
+
+.legal__prose code {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--gray-100);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.legal__pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin-top: 44px;
+  padding-top: 22px;
+  border-top: 1px solid var(--gray-100);
+  font-size: 0.875rem;
+}
+
+.legal__pager-link {
+  color: var(--gray-700);
+  font-weight: 600;
+}
+
+.legal__pager-link:hover {
+  color: var(--red-dark);
+  text-decoration: underline;
+}
+
+/* ---------- Not found ---------- */
+
+.notfound {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 62vh;
+  padding: 56px 24px;
+}
+
+.notfound__inner {
+  max-width: 520px;
+  text-align: center;
+}
+
+.notfound__title {
+  font-size: clamp(1.5rem, 3.4vw, 2rem);
+  color: var(--black);
+}
+
+.notfound__body {
+  margin-top: 14px;
+  color: var(--gray-500);
+  font-size: 0.95rem;
+}
+
+.notfound__body code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--gray-100);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.notfound__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 28px;
+}
+
+/* ---------- Account: billing and deletion ---------- */
+
+.button--danger {
+  background: var(--white);
+  border-color: var(--red);
+  color: var(--red-dark);
+}
+
+.button--danger:hover:not(:disabled) {
+  background: var(--red-tint);
+}
+
+.account__notice {
+  padding: 11px 13px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--gray-050);
+  font-size: 0.8rem;
+  color: var(--gray-700);
+  line-height: 1.5;
+}
+
+.account__danger {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm);
+  background: var(--red-tint);
+  font-size: 0.8rem;
+  color: var(--red-dark);
+  line-height: 1.5;
+}
+
+.account__danger svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* Quiet by design: destructive, one click to reveal, never a primary action. */
+.account__danger-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gray-500);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.account__danger-link:hover {
+  color: var(--red-dark);
+  text-decoration: underline;
+}
+
+/* ---------- Skip link ---------- */
+
+.skip {
+  position: absolute;
+  left: 16px;
+  top: -48px;
+  z-index: 60;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--white);
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: top 0.15s ease;
+}
+
+.skip:focus {
+  top: 12px;
 }
 
 /* ---------- Responsive ---------- */
@@ -1973,5 +2348,17 @@ textarea {
   .track__time {
     grid-column: 1 / -1;
     padding: 0;
+  }
+
+  .legal__inner {
+    padding: 40px 18px 48px;
+  }
+
+  .legal__toc-list {
+    grid-template-columns: 1fr;
+  }
+
+  .footer__inner {
+    align-items: flex-start;
   }
 }

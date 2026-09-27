@@ -7,10 +7,19 @@ or on local machine state.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 
+logger = logging.getLogger(__name__)
+
 TRUE_VALUES = {"1", "true", "yes", "on"}
+FALSE_VALUES = {"0", "false", "no", "off"}
+
+#: Recognised deployment environments. Anything else is treated as development
+#: by `is_production`, so a typo can never silently disable the production
+#: startup assertions.
+PRODUCTION_ENV = "production"
 
 
 def _env_str(name: str, default: str) -> str:
@@ -30,20 +39,69 @@ def _env_optional(name: str) -> str | None:
 
 
 def _env_int(name: str, default: int) -> int:
+    """Read an integer setting, complaining loudly when the value is nonsense.
+
+    A bad value must not crash the service, but it must not be swallowed either:
+    `MAX_UPLOAD_MB=500MB` used to fall back to the default with no trace at all,
+    so a typo silently changed the upload limit.
+    """
     raw = _env_optional(name)
     if raw is None:
         return default
     try:
         return int(raw)
     except ValueError:
+        logger.warning(
+            "Ignoring %s=%r: expected a whole number. Falling back to %r.",
+            name,
+            raw,
+            default,
+        )
         return default
 
 
 def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean setting, complaining loudly when the value is nonsense.
+
+    Unrecognised text used to be read as False, which turned a typo such as
+    `HSTS_ENABLED=enabeld` into a silently disabled security control rather than
+    a visible configuration mistake.
+    """
     raw = _env_optional(name)
     if raw is None:
         return default
-    return raw.lower() in TRUE_VALUES
+    value = raw.lower()
+    if value in TRUE_VALUES:
+        return True
+    if value in FALSE_VALUES:
+        return False
+    logger.warning(
+        "Ignoring %s=%r: expected a boolean (%s). Falling back to %r.",
+        name,
+        raw,
+        "/".join(sorted(TRUE_VALUES | FALSE_VALUES)),
+        default,
+    )
+    return default
+
+
+def _env_bool_opt(name: str) -> bool | None:
+    """Read a tri-state boolean: True, False, or None when unset or unreadable."""
+    raw = _env_optional(name)
+    if raw is None:
+        return None
+    value = raw.lower()
+    if value in TRUE_VALUES:
+        return True
+    if value in FALSE_VALUES:
+        return False
+    logger.warning(
+        "Ignoring %s=%r: expected a boolean (%s). Treating it as unset.",
+        name,
+        raw,
+        "/".join(sorted(TRUE_VALUES | FALSE_VALUES)),
+    )
+    return None
 
 
 DEFAULT_DEV_ORIGINS = (
@@ -53,6 +111,12 @@ DEFAULT_DEV_ORIGINS = (
 
 def _parse_origins(raw: str) -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+def _is_local_frontend(url: str) -> bool:
+    """Whether a frontend URL points back at the developer's own machine."""
+    lowered = url.lower()
+    return "localhost" in lowered or "127.0.0.1" in lowered or "[::1]" in lowered
 
 
 @dataclass(frozen=True)
@@ -85,6 +149,12 @@ class Settings:
         default_factory=lambda: _env_bool("WHISPERX_ALIGN_ENABLED", True)
     )
 
+    # --- Deployment environment -------------------------------------------
+    # "development" (default), "production", or "test". Production enables the
+    # startup assertions in app.main.lifespan that refuse to serve with a
+    # configuration known to be unsafe.
+    app_env: str = field(default_factory=lambda: _env_str("APP_ENV", "development").lower())
+
     # --- Server -----------------------------------------------------------
     host: str = field(default_factory=lambda: _env_str("HOST", "0.0.0.0"))
     # Railway supplies PORT. 8000 is the local default.
@@ -94,12 +164,101 @@ class Settings:
         default_factory=lambda: _parse_origins(_env_str("CORS_ORIGINS", DEFAULT_DEV_ORIGINS))
     )
 
+    # --- Transport and response hardening ---------------------------------
+    # Whether a forwarded-for header may be used to derive a rate-limit bucket.
+    # Off by default: the header is attacker controlled unless a proxy that
+    # overwrites it is known to sit in front of the service, and trusting it
+    # blindly lets one client mint unlimited buckets.
+    trust_proxy_headers: bool = field(default_factory=lambda: _env_bool("TRUST_PROXY_HEADERS", False))
+    # HSTS is only emitted over HTTPS unless this is explicitly turned on, so a
+    # local plain-HTTP run is never pinned to HTTPS by a cached header.
+    hsts_enabled: bool | None = field(default_factory=lambda: _env_bool_opt("HSTS_ENABLED"))
+
+    # --- Abuse controls ----------------------------------------------------
+    # Bounds on the in-process limiter in app.ratelimit. Each limit is applied
+    # both per client address and per account, so rotating addresses does not
+    # defeat a limit and one account cannot be sprayed from many hosts.
+    # A limit or window of 0 disables that bucket.
+    rate_limit_max_keys: int = field(default_factory=lambda: _env_int("RATE_LIMIT_MAX_KEYS", 10000))
+    register_rate_limit: int = field(default_factory=lambda: _env_int("RATE_LIMIT_REGISTER", 5))
+    register_rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_REGISTER_WINDOW_SECONDS", 3600)
+    )
+    login_rate_limit: int = field(default_factory=lambda: _env_int("RATE_LIMIT_LOGIN", 10))
+    login_rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_LOGIN_WINDOW_SECONDS", 300)
+    )
+    transcribe_rate_limit: int = field(default_factory=lambda: _env_int("RATE_LIMIT_TRANSCRIBE", 20))
+    transcribe_rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_TRANSCRIBE_WINDOW_SECONDS", 300)
+    )
+    checkout_rate_limit: int = field(default_factory=lambda: _env_int("RATE_LIMIT_CHECKOUT", 10))
+    checkout_rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_CHECKOUT_WINDOW_SECONDS", 3600)
+    )
+    portal_rate_limit: int = field(default_factory=lambda: _env_int("RATE_LIMIT_PORTAL", 10))
+    portal_rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_PORTAL_WINDOW_SECONDS", 3600)
+    )
+    change_password_rate_limit: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_CHANGE_PASSWORD", 5)
+    )
+    change_password_rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_CHANGE_PASSWORD_WINDOW_SECONDS", 900)
+    )
+    reset_password_rate_limit: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_RESET_PASSWORD", 10)
+    )
+    reset_password_rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_RESET_PASSWORD_WINDOW_SECONDS", 900)
+    )
+    # Account deletion is irreversible and requires a password, so it gets its own
+    # bucket rather than sharing one with password changes: a user who mistypes a
+    # new password five times must still be able to close their account, and a
+    # flood of delete attempts must not be able to borrow budget from a
+    # different control to get there.
+    delete_account_rate_limit: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_DELETE_ACCOUNT", 5)
+    )
+    delete_account_rate_window_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_DELETE_ACCOUNT_WINDOW_SECONDS", 900)
+    )
+
+    # --- Durable (cross-replica) abuse controls -----------------------------
+    # The in-process limiter above is per replica: on a host running N replicas
+    # an attacker who reaches all of them gets N times the limit, which is
+    # exactly the wrong property for the unauthenticated login, register, and
+    # forgot-password endpoints. The durable counter lives in the database and is
+    # shared, so the fleet-wide budget is the configured one.
+    #
+    # The in-process limiter still runs first and in front of it: it needs no
+    # database round trip, so a flood is absorbed before it can reach Postgres.
+    # Setting this to 0/false removes the durable half and leaves the cheap
+    # per-replica pre-filter, which is the documented way to turn it off.
+    rate_limit_durable_enabled: bool = field(
+        default_factory=lambda: _env_bool("RATE_LIMIT_DURABLE_ENABLED", True)
+    )
+    # How stale a durable window may be before the table is swept. Windows older
+    # than the longest configured bucket window can never be read again, so they
+    # are deleted. Only the *interval* is configured: the retention horizon is
+    # derived from the bucket windows themselves so the two can never disagree
+    # and leave a row behind forever.
+    rate_limit_durable_prune_interval_seconds: int = field(
+        default_factory=lambda: _env_int("RATE_LIMIT_DURABLE_PRUNE_INTERVAL_SECONDS", 300)
+    )
+
     # --- Uploads ----------------------------------------------------------
     # Temporary storage only; the file is deleted once transcription finishes.
     max_upload_bytes: int = field(
         default_factory=lambda: _env_int("MAX_UPLOAD_MB", 500) * 1024 * 1024
     )
     temp_dir: str | None = field(default_factory=lambda: _env_optional("TEMP_DIR"))
+    # Age at which a `captionline-*` work directory left behind by a crashed or
+    # killed request is swept at startup. Uploaded media is meant to be
+    # transient, so anything this old is a leak, not a cache.
+    temp_sweep_max_age_seconds: int = field(
+        default_factory=lambda: _env_int("TEMP_SWEEP_MAX_AGE_SECONDS", 86400)
+    )
 
     # --- Diagnostics ------------------------------------------------------
     # Loads WhisperX eagerly at startup instead of on the first request.
@@ -221,8 +380,82 @@ class Settings:
         )
 
     @property
+    def is_production(self) -> bool:
+        """Whether production startup assertions apply.
+
+        Any value other than "production" behaves as development, so a
+        misspelled APP_ENV cannot turn the assertions off silently.
+        """
+        return self.app_env == PRODUCTION_ENV
+
+    @property
     def cors_allows_any(self) -> bool:
-        return "*" in self.cors_origins
+        """Whether CORS_ORIGINS contains an explicit wildcard.
+
+        This must be an equality test, not a membership test. `"*" in
+        self.cors_origins` asked whether the single character appears anywhere
+        in the list, so `CORS_ORIGINS=https://captionline.pro,*` reported True
+        and the configured origin was thrown away in favour of allowing every
+        origin.
+        """
+        return any(origin.strip() == "*" for origin in self.cors_origins)
+
+    def production_problems(self) -> list[str]:
+        """Configuration faults that must prevent a production deployment.
+
+        Each entry is a complete, actionable sentence so a fatal startup log
+        tells an operator exactly which variable to change. Returning a list
+        rather than raising keeps the caller in charge of how loudly to fail.
+        """
+        problems: list[str] = []
+
+        if self.cors_allows_any:
+            problems.append(
+                "CORS_ORIGINS contains '*'. List the exact frontend origins "
+                "(for example https://captionline.pro) instead of a wildcard."
+            )
+
+        if self.email_provider_is_development_only:
+            problems.append(
+                f"EMAIL_PROVIDER={self.email_provider} is a development or test "
+                "provider and would print password reset links to the log. Set "
+                "EMAIL_PROVIDER=resend with a real EMAIL_API_KEY."
+            )
+
+        if self.database_echo:
+            problems.append(
+                "DATABASE_ECHO is enabled, so every SQL statement (including "
+                "bind parameters) would be logged. Set DATABASE_ECHO=0."
+            )
+
+        frontend = (self.frontend_url or "").strip()
+        if not frontend:
+            problems.append("FRONTEND_URL is not set, so reset and checkout links have no origin.")
+        elif not frontend.lower().startswith("https://"):
+            problems.append(
+                f"FRONTEND_URL={frontend!r} is not an https origin, so reset links "
+                "would travel in clear text. Set an https URL."
+            )
+        elif _is_local_frontend(frontend):
+            problems.append(
+                f"FRONTEND_URL={frontend!r} points at localhost. Set the deployed "
+                "frontend origin."
+            )
+
+        if self.stripe_secret_key and not frontend.lower().startswith("https://"):
+            problems.append(
+                "STRIPE_SECRET_KEY is set but FRONTEND_URL is not https, so Stripe "
+                "success and cancel redirects would leave the user on a clear-text "
+                "origin. Set an https FRONTEND_URL."
+            )
+
+        if self.email_provider == "resend" and not self.email_api_key:
+            problems.append(
+                "EMAIL_PROVIDER=resend but EMAIL_API_KEY is missing, so no password "
+                "reset mail can be sent. Set EMAIL_API_KEY or choose another provider."
+            )
+
+        return problems
 
     @property
     def email_is_configured(self) -> bool:

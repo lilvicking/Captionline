@@ -15,6 +15,15 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1)
 
+    #: Legal consent, recorded but never required. Both default to False so an
+    #: older client that sends only email and password keeps working, and so a
+    #: signup that somehow omits them cannot be blocked. The frontend presents
+    #: the agreement; the backend only remembers what the user asserted. Nothing
+    #: reads these back to gate sign-in, so a user who never ticked a box is not
+    #: locked out — see the note on the consent columns in `db/models.py`.
+    accepted_terms: bool = False
+    acknowledged_privacy: bool = False
+
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -145,3 +154,69 @@ class MessageResponse(BaseModel):
     """A neutral confirmation with no account or token detail."""
 
     message: str
+
+
+# --- Account deletion --------------------------------------------------------
+
+
+class AccountDeletionRequest(BaseModel):
+    """Proof that the caller really means it, for an irreversible action.
+
+    Two independent checks: the current password, so a borrowed or replayed
+    session cannot destroy an account, and a literal typed confirmation, so a
+    stray or automated request cannot either.
+
+    `confirmation` defaults to an empty string rather than being required, so a
+    caller that omits it gets the endpoint's own explicit 400 explaining what is
+    missing instead of a generic schema 422. Either way the request is refused;
+    the shape of the refusal is simply the one that tells the user what to do.
+    """
+
+    current_password: str = Field(min_length=1, max_length=1024)
+    confirmation: str = Field(default="", max_length=64)
+
+
+class AccountDeletionResponse(MessageResponse):
+    """The neutral confirmation, plus what this action does *not* delete.
+
+    `message` is exactly the neutral sentence and nothing else, so it can never
+    grow wording that echoes a submitted value or hints at internal state. The
+    Stripe retention point is a separate field because it is a disclosure the
+    customer is entitled to, and keeping it out of `message` lets the frontend
+    place it where the confirmation is actually explained.
+
+    `deleted` is a machine-readable success flag. It is always true here: this
+    response is only ever produced after the commit succeeds, and a failure
+    returns a 5xx with no body of this shape. A client that keys off a field
+    rather than off prose gets an unambiguous answer.
+    """
+
+    deleted: bool = True
+    stripe_data_note: str
+
+
+# --- Legal -------------------------------------------------------------------
+
+
+class LegalVersionsResponse(BaseModel):
+    """The legal text currently in force, for rendering without hardcoding.
+
+    Public and unauthenticated: the signup page has to show the versions before
+    there is an account to sign in to. The values come from `app/terms.py`, so
+    the frontend can never display a version the backend is not actually
+    recording.
+    """
+
+    terms_version: str
+    terms_effective_date: str
+    privacy_version: str
+    privacy_effective_date: str
+
+    #: None when no support mailbox is configured. The frontend must not render
+    #: a mailto link to an address that is not monitored.
+    support_email: str | None = None
+    support_email_configured: bool = False
+
+    #: Placeholder text until counsel has chosen a jurisdiction. Exposed so it
+    #: is visible in the rendered product rather than only in this repository.
+    governing_law: str

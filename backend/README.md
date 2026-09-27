@@ -159,7 +159,59 @@ the account is revoked, and **all login sessions are revoked**.
 
 Requires a session. Body `{"current_password": "...", "new_password": "..."}`.
 Verifies the current password, then revokes every session and outstanding reset
-token. The caller is signed out too.
+token. The caller is signed out too. Throttled by the `change-password` rate-limit
+bucket.
+
+### `POST /api/account/delete`
+
+Requires a session. Body `{"current_password": "...", "confirmation": "DELETE"}`.
+The confirmation must be the literal string `DELETE`, so deletion cannot happen
+by accident.
+
+| Status | Meaning |
+| ------ | ------- |
+| `200` | Deleted. Sessions are invalidated and the account record is removed |
+| `400` | Missing or wrong confirmation word |
+| `401` | No session, or the current password is wrong |
+| `409` | An active subscription exists; cancel it through the portal first |
+| `429` | Throttled by the `delete-account` rate-limit bucket |
+| `500` | Generic failure. The transaction is rolled back, so nothing changed |
+
+**The billing rule is block, not cancel.** An account with an active subscription and a Stripe
+subscription id is refused with `409` and **no Stripe call is made**. Cancellation is already
+portal-based (`POST /api/billing/portal`), so a server-side cancel would be a second, unspecified
+path to the same state — and it can fail *after* the local commit, leaving two systems that cannot
+be rolled back together. Making the customer open the portal is slower but it is one operation,
+performed by the customer, with one outcome. An active status with **no** external id is treated as
+a half-applied webhook and does not block, so one bad row cannot lock a customer out of deleting
+their account.
+
+Deletion is irreversible, so it has its own rate-limit bucket rather than sharing
+`change-password`: a user who mistypes a new password five times must still be able to close their
+account.
+
+### `GET /api/legal/versions`
+
+Public, no authentication, so `/terms` and `/privacy` can show the version a visitor is agreeing to
+while signed out. The version strings live in `app/terms.py` and nowhere else, so the frontend can
+never display a version that differs from the one recorded against an account.
+
+```json
+{
+  "terms_version": "2026-09-27",
+  "terms_effective_date": "2026-09-27",
+  "privacy_version": "2026-09-27",
+  "privacy_effective_date": "2026-09-27",
+  "support_email": null,
+  "support_email_configured": false,
+  "governing_law": "[governing jurisdiction to be confirmed]"
+}
+```
+
+`support_email` is `null` and `support_email_configured` is `false` until an operator sets
+`SUPPORT_EMAIL`. `governing_law` is a deliberate **visible placeholder**: no jurisdiction has been
+chosen, and printing a plausible-looking one would be a fabricated legal claim. Both must be resolved
+before launch.
 
 ### Status codes
 
@@ -168,12 +220,13 @@ token. The caller is signed out too.
 | 200 | Success |
 | 201 | Account created |
 | 204 | Logged out |
-| 400 | Unsupported file, invalid plan, or malformed webhook payload |
+| 400 | Unsupported file, invalid plan, malformed webhook payload, or wrong deletion confirmation |
 | 401 | Missing, invalid, revoked, or expired session |
 | 402 | Not enough processing allowance remaining |
-| 409 | Email already registered |
+| 409 | Email already registered, or account deletion blocked by an active subscription |
 | 413 | File exceeds `MAX_UPLOAD_MB`, or media exceeds the duration cap |
 | 422 | Invalid payload, unreadable media, or no audio track |
+| 429 | Rate limit reached. `Retry-After` is set; the body is deliberately generic |
 | 502 | Stripe unreachable |
 | 503 | WhisperX unavailable, Stripe not configured, or no `DATABASE_URL` |
 
@@ -231,7 +284,7 @@ deploy. Migrations never run on import.
 
 ### Schema
 
-`users` (19 columns)
+`users` (23 columns)
 
 | Group | Columns |
 | ----- | ------- |
@@ -240,11 +293,36 @@ deploy. Migrations never run on import.
 | Mirrored subscription | `subscription_status`, `subscription_provider`, `subscription_external_id`, `subscription_price_id`, `subscription_current_period_end` |
 | Usage | `monthly_processing_allowance_seconds`, `processing_used_seconds`, `usage_period_started_at`, `usage_period_ends_at` |
 | Entitlements | `preview_limit_seconds`, `has_full_preview`, `can_export` |
+| Legal consent | `terms_accepted_at`, `terms_version`, `privacy_acknowledged_at`, `privacy_version` |
 | Timestamps | `created_at`, `updated_at` |
+
+The four consent columns are **recorded, never enforced**. `NULL` means "we did not record an
+agreement", which is true of every account created before this existed; nothing reads them to decide
+whether an account may sign in, so a `NULL` can never lock anybody out. The version strings label
+which published text was shown, so the text itself is never stored and can be replaced without a data
+migration.
 
 `usage_reservations` — two-phase allowance holds (see accounting below).
 `stripe_events` — processed Stripe event ids, for idempotent webhooks.
 `sessions` — bearer sessions; tokens are stored only as SHA-256 hashes.
+`password_reset_tokens` — reset tokens, stored hashed, with expiry, single use, and revocation.
+`rate_limit_buckets` — the shared, cross-replica rate-limit counters (see rate limiting below).
+
+### Migrations
+
+| Revision | Change |
+| -------- | ------ |
+| `0001_initial_accounts` | `users`, `sessions` |
+| `0002_billing_and_usage` | `users.subscription_price_id`, `usage_reservations`, `stripe_events` |
+| `0003_password_reset` | `password_reset_tokens` |
+| `0004_account_deletion_and_consent` | four nullable consent columns on `users`. No backfill, no defaults, no `NOT NULL` |
+| `0005_rate_limit_buckets` | `rate_limit_buckets` |
+
+Every revision is additive, so an application rollback stays safe against a migrated schema. A
+schema rollback is destructive: `0002` discards in-flight usage holds and the webhook idempotency
+log, `0003` discards outstanding reset links, and `0005` empties the shared rate-limit budget (so a
+downgrade is also a one-off reset of the abuse counters). Do not downgrade while requests are being
+billed or password resets are in flight.
 
 ### Plan catalogue
 
@@ -341,13 +419,16 @@ Opaque bearer sessions, which are simple for a cross-origin SPA and support real
 - `pwdlib` was evaluated and rejected: version 0.3.1 produced valid `$argon2id$` hashes that its own
   `verify` could not identify, which would have failed every login.
 
-Not implemented, by design: OAuth or social login, email verification, and password reset.
+Not implemented, by design: OAuth or social login, and email verification of new addresses. Password
+reset **is** implemented — see [Password recovery](#password-recovery) below.
 
 **Tradeoff:** the token is held in `localStorage` and sent as an `Authorization: Bearer` header. The
 Captionline web and API are separate Railway origins, so this avoids `SameSite` and cookie-credential
 handling. The hardening path, if wanted, is httpOnly `SameSite=None; Secure` cookies plus CSRF
-protection. Moving to cookies would also require the custom domain to be attached first, since
-`SameSite=None` cookies are rejected on cross-site requests.
+protection, and it is **deferred rather than overlooked**: `SameSite=None` cookies are rejected on
+cross-site requests, so the migration only becomes possible once the custom domain is attached to
+both services, and it is a change to the auth path of every endpoint. The localStorage trade-off is
+documented and revisited after launch; see [Known limitations](#known-limitations).
 
 ### Session hygiene
 
@@ -357,6 +438,138 @@ protection. Moving to cookies would also require the custom domain to be attache
   cannot be probed.
 - Expired and revoked rows are purged opportunistically by `purge_expired_sessions`, keeping a
   recently expired row briefly so it reports "expired" rather than "unknown".
+
+---
+
+## Rate limiting
+
+`app/ratelimit.py`. Registration, login, transcription, and the billing session endpoints were all
+reachable without any request budget, which is not only a spam problem: Argon2id at 64 MiB makes an
+unthrottled login endpoint a cheap way to burn a server's CPU and RAM, and unthrottled registration
+is a way to mint unlimited free transcription time.
+
+### Buckets
+
+Each bucket is a fixed window, configured by an environment variable, and applied **both per client
+address and per account**. Either dimension alone is trivially evaded — many addresses defeat a
+per-address limit, and one account behind many addresses defeats a per-account limit. A limit or a
+window of `0` disables that bucket.
+
+| Bucket | Endpoint | Default |
+| ------ | -------- | ------- |
+| `register` | `POST /api/auth/register` | 5 / 3600 s |
+| `login` | `POST /api/auth/login` | 10 / 300 s |
+| `forgot-password` | `POST /api/auth/forgot-password` | 5 / 900 s (`PASSWORD_RESET_IP_*`) |
+| `transcribe` | `POST /api/transcribe` | 20 / 300 s |
+| `checkout` | `POST /api/billing/checkout` | 10 / 3600 s |
+| `portal` | `POST /api/billing/portal` | 10 / 3600 s |
+| `change-password` | `POST /api/auth/change-password` | 5 / 900 s |
+| `reset-password` | `POST /api/auth/reset-password` | 10 / 900 s |
+| `delete-account` | `POST /api/account/delete` | 5 / 900 s |
+
+Every throttled endpoint answers `429` with one generic message and a `Retry-After` header, except
+`forgot-password`, which keeps its ordinary response: a `429` there would reveal that the address is
+under observation, which is itself an enumeration signal.
+
+### Two layers, and the per-replica limitation of the first
+
+**The in-process layer** is a bounded LRU map of TTL windows. It needs no database round trip, so a
+flood is absorbed before it can reach Postgres, and it is what every bucket uses. It is bounded on
+purpose: at most `RATE_LIMIT_MAX_KEYS` keys (default 10,000) are held, expired entries are pruned on
+every call, and account subjects are stored as a truncated SHA-256 digest so email addresses are not
+held in process memory.
+
+It is also **per replica**, and that is a real limitation rather than a footnote:
+
+- on a host running N replicas, an attacker who reaches all of them gets N times the limit;
+- every counter resets when a replica is recycled;
+- a rolling deploy resets the whole fleet's budget.
+
+Those properties are tolerable for transcription and billing, where the caller is already
+authenticated and a row in the database throttles them per account anyway. They are **not** tolerable
+where password guessing, free-tier account minting, and mail-provider flooding all begin.
+
+**The durable layer** (`rate_limit_buckets`, migration `0005`) is a shared, database-backed
+fixed-window counter consulted for the three unauthenticated buckets only: `login`, `register`, and
+`forgot-password`. It is always the *second* check, never the first — the cheap pre-filter runs in
+front of it precisely so a burst is refused without a database connection. It uses an
+`INSERT ... ON CONFLICT DO UPDATE` that increments and reopens the window in one statement, so two
+replicas counting the same key cannot both read a stale count and both slip under the limit.
+
+Two deliberate properties:
+
+- **Availability over strictness.** If the database is unreachable, the table is missing, or the
+  write fails, the durable check **allows the request and logs**. A limiter that turns a database blip
+  into a `500` on the login page converts a degraded dependency into a total outage, and an outage is
+  the worse outcome. The failure is logged, so an operator can see that the shared budget is not
+  being enforced.
+- **Bounded rows, no scheduler.** A row whose window is older than the longest configured bucket
+  window can never be read again, so an opportunistic prune (at most once per
+  `RATE_LIMIT_DURABLE_PRUNE_INTERVAL_SECONDS`, from a request already writing the table) deletes it.
+  The retention horizon is derived from the bucket windows rather than configured separately, so the
+  two can never disagree. There is no background thread.
+
+The durable table is deliberately **not** cleared at startup: wiping it when one replica restarts
+would hand an attacker the whole fleet's budget, which is the exact property the layer exists to
+remove. It needs `DATABASE_URL`; without a database the in-process layer is the whole control, and
+`RATE_LIMIT_DURABLE_ENABLED=0` is the documented way to turn the durable half off.
+
+### Client identity
+
+The bucket key prefers `request.client.host`, the socket peer, which cannot be forged by a header.
+`X-Forwarded-For` is consulted **only** when `TRUST_PROXY_HEADERS` is explicitly enabled, i.e. when a
+proxy that *overwrites* that header is known to be in front of the service. Trusting it by default
+would let a single `curl -H` call mint unlimited buckets and defeat the limits.
+
+---
+
+## Security response headers
+
+`app/headers.py` is a plain ASGI wrapper (not `BaseHTTPMiddleware`, so it adds no response buffering)
+that sets hardening headers on every HTTP response. A response that already carries a value keeps it,
+so a route needing a different `Cache-Control` is not silently overridden.
+
+| Header | Why |
+| ------ | --- |
+| `X-Content-Type-Options: nosniff` | Every response here is JSON and none of it is meant to be rendered |
+| `X-Frame-Options: DENY` | No response may be framed, so a signed-in page cannot be clickjacked |
+| `Referrer-Policy: strict-origin-when-cross-origin` | Keeps full paths and query strings, which carry reset tokens, out of third-party `Referer` headers |
+| `Permissions-Policy` | Locks down camera, microphone, and geolocation, which a transcription UI never needs |
+| `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` | A JSON API loads nothing, so everything is denied outright |
+| `Strict-Transport-Security` | Sent only over HTTPS, or when `HSTS_ENABLED` says so. Conditional on purpose: pinning localhost to HTTPS would break local development |
+| `Cache-Control: no-store` | On the endpoints that return a bearer token or a password-reset outcome, so nothing writes a token to a shared, CDN, or on-disk cache |
+
+`/docs`, `/redoc`, and `/openapi.json` are exempted from the **CSP only** — they load their own
+assets from a public CDN and `/openapi.json` is the schema they fetch, so `default-src 'none'` would
+blank them. Every other header still applies to them, and the exemption is an explicit list
+(`CSP_EXEMPT_PATHS`) rather than an implication.
+
+---
+
+## Production configuration gate
+
+`APP_ENV` selects the deployment environment. It defaults to `development`, and **anything other than
+`production` is treated as development**, so a misspelling cannot silently disable the checks.
+
+`assert_production_ready()` runs in the lifespan **only** when `APP_ENV=production`, and calls
+`Settings.production_problems()`. If that returns anything, the service logs each problem as
+`CRITICAL` and raises before binding any traffic:
+
+- `CORS_ORIGINS` contains `*` (list the exact frontend origin instead);
+- `EMAIL_PROVIDER` is `console` or `memory`, which print password reset links — and their raw
+  tokens — to the log;
+- `DATABASE_ECHO` is on, so every SQL statement including bind parameters such as password and token
+  hashes is logged;
+- `FRONTEND_URL` is empty, is not an `https://` origin, or points at localhost, so reset and
+  checkout links would be wrong or would travel in clear text;
+- `STRIPE_SECRET_KEY` is set while `FRONTEND_URL` is not `https`, so Stripe's success and cancel
+  redirects would land on a clear-text origin;
+- `EMAIL_PROVIDER=resend` with no `EMAIL_API_KEY`, so no password reset mail can be sent.
+
+**This is a breaking change for a misconfigured production, on purpose.** The first deploy that sets
+`APP_ENV=production` will refuse to boot until those problems are fixed, which is the point: the
+fault surfaces at startup rather than during an incident. Set the variables the gate checks
+(`CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_*`) **before** setting `APP_ENV`.
 
 ---
 
@@ -468,8 +681,17 @@ for the alignment model) and is slow. Later requests reuse the cache and are muc
 pytest
 ```
 
+`pytest.ini` sets `pythonpath = .`, so the suite runs from the repository root as well as from
+`backend/`:
+
+```bash
+backend\.venv\Scripts\python.exe -m pytest backend\tests
+```
+
 The suite covers authentication, the plan catalogue, allowance accounting (including concurrency
-and no-charge-on-failure), the transcription gate, Stripe checkout and webhooks, and the
+and no-charge-on-failure), the transcription gate, Stripe checkout and webhooks, account deletion and
+its billing rule, password recovery, the rate limiter (both layers, including the per-replica and
+database-failure behaviour), the production configuration gate, the security headers, and the
 no-database fallback. It runs the real Alembic migrations against a temporary SQLite database, so no
 PostgreSQL server and no Stripe account are needed. WhisperX is mocked for accounting tests; a real
 `ffprobe` call is made so duration measurement is genuinely exercised.
@@ -484,12 +706,27 @@ is platform specific.
 
 ## Configuration
 
-Every setting is an environment variable. See `.env.example` for the annotated list.
+Every setting is an environment variable. **`.env.example` is the complete list** — all 60 of them,
+each with its safe default, whether it is a secret, and what it does. The table below is only the
+short list worth knowing about; `APP_ENV` and the `RATE_LIMIT_*` family are documented in full
+there.
 
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
-| `DATABASE_URL` | unset | PostgreSQL (production) or SQLite (local) URL |
+| `APP_ENV` | `development` | **Production must set `production`.** Selects the startup configuration gate; see above |
+| `DATABASE_URL` | unset | PostgreSQL (production) or SQLite (local) URL. **Secret** |
 | `DATABASE_ECHO` | `0` | Log SQL. Never enable in production. |
+| `EMAIL_PROVIDER` | `none` | `resend` in production; `console`/`memory` are dev and test only |
+| `EMAIL_API_KEY` | unset | Resend API key. **Secret** |
+| `EMAIL_FROM` | `Captionline <no-reply@captionline.pro>` | Verified sender |
+| `SUPPORT_EMAIL` | unset | Monitored support mailbox, reported by `/api/legal/versions`. Must be set before launch |
+| `STRIPE_SECRET_KEY` | unset | Stripe API key. **Secret** |
+| `STRIPE_WEBHOOK_SECRET` | unset | Verifies webhook signatures. **Secret** |
+| `TRUST_PROXY_HEADERS` | `0` | Allow `X-Forwarded-For` as a rate-limit key. Only behind a proxy that overwrites it |
+| `HSTS_ENABLED` | unset | Force HSTS on/off. Unset means "only over HTTPS" |
+| `RATE_LIMIT_MAX_KEYS` | `10000` | Ceiling on in-process rate-limit keys, so memory is bounded |
+| `RATE_LIMIT_DURABLE_ENABLED` | `1` | Shared, cross-replica counters for the unauthenticated buckets |
+| `TEMP_SWEEP_MAX_AGE_SECONDS` | `86400` | Age at which a work directory left by a killed request is swept at startup |
 | `WHISPERX_MODEL` | `small` | `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3` |
 | `WHISPERX_DEVICE` | `auto` | `auto` uses CUDA when available, otherwise CPU |
 | `WHISPERX_COMPUTE_TYPE` | `auto` | `auto` = float16 on CUDA, int8 on CPU |
@@ -505,6 +742,9 @@ Every setting is an environment variable. See `.env.example` for the annotated l
 | `MAX_UPLOAD_MB` | `500` | Upload size limit |
 | `TEMP_DIR` | system temp | Leave unset on ephemeral hosts |
 | `PRELOAD_MODEL` | `0` | Set `1` to load the model at startup |
+
+The four secrets in the system are `DATABASE_URL`, `EMAIL_API_KEY`, `STRIPE_SECRET_KEY`, and
+`STRIPE_WEBHOOK_SECRET`. The WhisperX models are public, so transcription needs no secret at all.
 
 ### Model choice
 
@@ -562,6 +802,11 @@ Railway environment variables to set:
 # REQUIRED
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 
+# REQUIRED IN PRODUCTION. The safety gate below does not run without it, and
+# without the gate a wildcard CORS origin, a console email provider logging
+# reset tokens, or DATABASE_ECHO logging password hashes all boot silently.
+APP_ENV=production
+
 # STRIPE REQUIRED (only for live billing; the service runs without them)
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...
@@ -572,6 +817,10 @@ STRIPE_PRICE_CREATOR_ANNUAL=price_...
 # RECOMMENDED
 FRONTEND_URL=https://<your-frontend-custom-domain>
 CORS_ORIGINS=https://<your-frontend-custom-domain>
+EMAIL_PROVIDER=resend
+EMAIL_API_KEY=re_...
+EMAIL_FROM=Captionline <no-reply@your-domain>
+SUPPORT_EMAIL=support@your-domain
 WHISPERX_MODEL=small
 WHISPERX_DEVICE=cpu
 WHISPERX_COMPUTE_TYPE=int8
@@ -583,7 +832,12 @@ SESSION_TTL_DAYS=30
 behind an account, so it also requires the database.
 
 Set `CORS_ORIGINS` to the deployed Captionline frontend origin. `*` is accepted for initial
-testing but should not be used in production.
+testing but **refuses to start** when `APP_ENV=production`.
+
+**Set `APP_ENV` last.** It turns on the startup gate, so the service will refuse to boot until
+`CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_PROVIDER`, `EMAIL_API_KEY`, and `DATABASE_ECHO` are all
+production-correct. That is the intended behaviour; it just means the variable order matters on the
+first production deploy.
 
 **Image size warning:** the CPU torch wheel plus the rest of the dependency tree produces an image
 of roughly **4-6 GB**. A CUDA-based image is considerably larger still. This is the main practical
@@ -596,17 +850,21 @@ cost of running WhisperX on Railway, and it is worth measuring before relying on
 3. Deploy the web app with `VITE_API_URL` pointing at the API origin.
 4. Configure `CORS_ORIGINS` and `FRONTEND_URL` on the API to the web origin.
 5. Add the Stripe variables and the webhook endpoint.
+6. Configure the email provider, then set `APP_ENV=production` and restart. The service now refuses
+   to start unless every check above passes, which is the intended final gate.
 
-Migrations are additive in this release (`0002` adds a column and two tables), so rolling forward
-does not require downtime.
+Migrations in this release (`0002`–`0005`) are all additive, so rolling forward does not require
+downtime.
 
 ### Rollback
 
-- **Application rollback** is safe: revert the image. `0002` is additive, so the previous release
-  keeps working against the migrated schema.
-- **Schema rollback** (`alembic downgrade -1`) drops `subscription_price_id`,
-  `usage_reservations`, and `stripe_events`. That discards in-flight usage holds and the webhook
-  idempotency log, so do not downgrade while requests are being billed.
+- **Application rollback** is safe: revert the image. Every revision from `0002` to `0005` is
+  additive, so the previous release keeps working against the migrated schema.
+- **Schema rollback** (`alembic downgrade -1`) is destructive. `0005` empties the shared
+  rate-limit budget, so a downgrade is also a one-off reset of the abuse counters; `0004` discards
+  recorded legal consents; `0003` discards outstanding reset links; `0002` drops
+  `subscription_price_id`, `usage_reservations`, and `stripe_events`, discarding in-flight usage
+  holds and the webhook idempotency log. Do not downgrade while requests are being billed.
 
 ### Custom domain readiness
 
@@ -646,12 +904,19 @@ backend/
 │   ├── env.py                     # Reads DATABASE_URL from app settings
 │   └── versions/
 │       ├── 0001_initial_accounts.py
-│       └── 0002_billing_and_usage.py
+│       ├── 0002_billing_and_usage.py
+│       ├── 0003_password_reset.py
+│       ├── 0004_account_deletion_and_consent.py
+│       └── 0005_rate_limit_buckets.py
 ├── alembic.ini                    # No connection string stored here
 ├── app/
 │   ├── __init__.py
-│   ├── config.py                  # Env-driven settings
-│   ├── main.py                    # FastAPI app, CORS, health, transcribe gate
+│   ├── config.py                  # Env-driven settings + the production configuration gate
+│   ├── headers.py                 # Security response headers (ASGI middleware)
+│   ├── ratelimit.py               # In-process and durable request budgets
+│   ├── email.py                   # Transactional email provider abstraction
+│   ├── terms.py                   # Legal versions, support mailbox, governing-law placeholder
+│   ├── main.py                    # FastAPI app, CORS, health, transcribe gate, startup sweep
 │   ├── schemas.py                 # Transcription, health, and Stripe health models
 │   ├── plans.py                   # Plan catalogue (single source of truth)
 │   ├── usage.py                   # Periods, reservations, allowance, snapshot
@@ -660,11 +925,12 @@ backend/
 │   ├── stripe_client.py           # Stripe client, checkout, signature verification
 │   ├── db/
 │   │   ├── base.py                # Declarative base
-│   │   ├── models.py              # User, Session, UsageReservation, StripeEvent
+│   │   ├── models.py              # User, Session, PasswordResetToken, UsageReservation, StripeEvent, RateLimitBucket
 │   │   └── session.py             # Engine, session, DATABASE_URL handling
 │   ├── routers/
-│   │   ├── auth.py                # register, login, me, logout
-│   │   ├── account.py             # entitlement, plans
+│   │   ├── auth.py                # register, login, me, logout, change-password
+│   │   ├── password_reset.py      # forgot-password, reset-password
+│   │   ├── account.py             # plans, entitlement, account deletion, legal versions
 │   │   └── billing.py             # checkout, portal, webhook
 │   └── security/
 │       ├── passwords.py           # Argon2id
@@ -675,9 +941,9 @@ backend/
 ├── tests/                         # pytest suite
 ├── requirements.txt
 ├── requirements.lock.txt
-├── pytest.ini
+├── pytest.ini                     # Sets pythonpath = . so the suite runs from any cwd
 ├── Dockerfile
-├── .env.example
+├── .env.example                   # Every variable the service reads, annotated
 └── .dockerignore
 ```
 
@@ -708,10 +974,12 @@ Two independent guards:
 
 * **Per account, durable** — a cooldown between requests and a cap on outstanding
   tokens (`PASSWORD_RESET_COOLDOWN_SECONDS`, `PASSWORD_RESET_MAX_ACTIVE`).
-* **Per client address, best effort** — an in-process fixed-window throttle
-  (`PASSWORD_RESET_IP_LIMIT`, `PASSWORD_RESET_IP_WINDOW_SECONDS`) applied before
-  any database work, so a flood costs nothing and stores no personal data. It
-  resets on restart and is per replica; the per-account limits are the durable half.
+* **Per client address** — the `forgot-password` rate-limit bucket
+  (`PASSWORD_RESET_IP_LIMIT`, `PASSWORD_RESET_IP_WINDOW_SECONDS`), which is in-process
+  by default and therefore per replica, and is also counted in the shared
+  `rate_limit_buckets` table when the durable rate limiter is enabled. See
+  [Rate limiting](#rate-limiting). Either way the request still returns the generic
+  `200`, so the throttle is not observable.
 
 A throttled request still returns the generic `200`, so throttling is not
 observable either.
@@ -757,10 +1025,35 @@ one route.
 - **One transcription at a time per process.** WhisperX model inference is guarded by a lock, so
   concurrent requests queue. Multiple replicas would scale this out.
 - **No email verification.** Password recovery exists; address verification does not.
-- **The per-address reset throttle is per process.** It resets on restart and is not shared across
-  Railway replicas. The per-account limits are the durable protection.
+- **The per-address reset throttle is not shared across Railway replicas** unless
+  `RATE_LIMIT_DURABLE_ENABLED=1` and `DATABASE_URL` is set, in which case `login`, `register`, and
+  `forgot-password` also keep a shared counter in `rate_limit_buckets`. The per-account cooldown and
+  outstanding-token cap are already durable. The buckets that have no durable half
+  (`transcribe`, `checkout`, `portal`, `change-password`, `reset-password`, `delete-account`) are
+  throttled per account in the database, so the per-replica address limit adds little there.
+- **Uploaded media is deleted in a `finally`, so a `SIGKILL` or an OOM kill leaves the file on
+  disk** until a later startup sweeps it. The bound is `TEMP_SWEEP_MAX_AGE_SECONDS` (24 hours by
+  default) and the sweep only runs at startup, so the true guarantee is "removed at the first start
+  more than that long after the request". The Privacy Policy states this rather than claiming
+  immediate deletion.
+- **FastAPI spools the multipart body before the request is authorised**, so the `401` for an
+  unauthenticated upload happens after the file has been written to disk. `MAX_UPLOAD_MB` bounds
+  that disk use but no in-application limit can prevent it; an ingress body-size limit is the
+  remaining control.
 - **Session tokens live in `localStorage`.** Acceptable now given the cross-origin setup; see the
-  authentication tradeoff note. Attaching the custom domain would unblock httpOnly cookies.
+  authentication tradeoff note. httpOnly cookies are deferred until the custom domain is attached,
+  not forgotten — `SameSite=None` is rejected cross-site, and the cookie + CSRF migration touches
+  every authenticated endpoint.
+- **`ffprobe` runs in-process and inherits the full environment.** A malicious media file reaching
+  an ffmpeg RCE is a full compromise including the database credentials. It is invoked with a list
+  argv and `shell=False`, but the ffmpeg build is not pinned and no protocol allow-list or output
+  size cap is applied.
+- **No governing law and no verified support mailbox.** `GOVERNING_LAW` is a visible placeholder and
+  `SUPPORT_EMAIL` is unset, so the Terms say the clause is not published and no page prints an
+  address nobody watches. Both must be set before paid subscriptions are offered.
+- **No published refund policy.** Terms §13 commits to nothing beyond the lawful-refund statement in
+  §7, because the commercial policy is an open business decision. It must be decided and published
+  before paid subscriptions are offered.
 - **Finished-video rendering does not exist.** `can_export` is granted as an *entitlement* only. The
   UI states plainly that rendering is not switched on; nothing is faked.
 - **Usage holds live in PostgreSQL, not in memory**, so a restart mid-transcription does not leak a

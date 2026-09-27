@@ -26,6 +26,7 @@ type VideoStageProps = {
   isPreviewLocked: boolean;
   onPreviewLock: () => void;
   onPreviewUnlock: () => void;
+  onShowPlans: () => void;
   onVerticalPositionChange: (value: number) => void;
   onTimeUpdate: () => void;
   onLoadedMetadata: () => void;
@@ -56,6 +57,7 @@ export function VideoStage({
   isPreviewLocked,
   onPreviewLock,
   onPreviewUnlock,
+  onShowPlans,
   onVerticalPositionChange,
   onTimeUpdate,
   onLoadedMetadata,
@@ -271,7 +273,7 @@ export function VideoStage({
       {isPreviewLocked ? (
         <>
           <div className="stage__shield" aria-hidden="true" />
-          <PreviewLock onReplayPreview={replayPreview} />
+          <PreviewLock onReplayPreview={replayPreview} onShowPlans={onShowPlans} />
         </>
       ) : null}
 

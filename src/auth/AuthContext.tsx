@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import type { ReactNode } from "react";
+import { TranscriptionError } from "../lib/api";
 import {
   fetchCurrentUser,
   fetchEntitlement,
@@ -22,6 +23,17 @@ import type { PreviewEntitlement } from "../entitlement";
 
 type AuthStatus = "loading" | "authenticated" | "anonymous";
 
+/**
+ * True when an error means the bearer token is no longer accepted.
+ *
+ * A 401 is the server saying this session is dead, so the UI must not keep
+ * claiming to be signed in. Anything else (offline, timeout, 5xx) may be
+ * transient and must not throw away a valid session.
+ */
+export function isUnauthorized(error: unknown): boolean {
+  return error instanceof TranscriptionError && error.status === 401;
+}
+
 type AuthContextValue = {
   status: AuthStatus;
   user: AuthUser | null;
@@ -36,6 +48,14 @@ type AuthContextValue = {
   entitlement: PreviewEntitlement;
   /** Re-reads plan and usage from the server. Called after transcription. */
   refresh: () => Promise<void>;
+  /**
+   * Drops the local session without calling the server.
+   *
+   * Used when an endpoint rejects the stored token (HTTP 401). The server has
+   * already decided the session is gone, so the client stops pretending the
+   * account is signed in rather than leaving a dead token in the UI.
+   */
+  expireSession: () => void;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -60,8 +80,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
-   * Restores a stored session on load. Any failure signs the viewer out and
-   * leaves the free tier in place rather than assuming paid access.
+   * Restores a stored session on load.
+   *
+   * Unlike `refresh`, every failure signs the viewer out here: there is no
+   * verified identity to preserve on a cold start, so a token that cannot be
+   * confirmed is discarded rather than carried forward. A rejected token (401)
+   * certainly has to go; the free tier stays in place either way rather than
+   * assuming paid access.
    */
   useEffect(() => {
     const token = getStoredToken();
@@ -140,8 +165,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * Re-reads entitlement and usage. Used after a transcription so the usage
    * meter reflects what was just spent, and after a Stripe redirect returns.
    *
-   * On failure the current values are kept and, if there are none, the free tier
-   * stays in place. It never widens access.
+   * A 401 means the token is no longer valid, so the session is cleared and the
+   * viewer is signed out. Every other failure keeps the last known state, and
+   * if there is none the free tier stays in place. It never widens access.
    */
   const refresh = useCallback(async () => {
     const token = getStoredToken();
@@ -154,10 +180,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const next = await fetchEntitlement(token);
       setAccount(next);
       setEntitlement(entitlementFromServer(next));
-    } catch {
+    } catch (error) {
+      if (isUnauthorized(error)) {
+        clearSession();
+        return;
+      }
       // Keep the last known state; the server remains the authority.
     }
-  }, []);
+  }, [clearSession]);
+
+  const expireSession = useCallback(() => {
+    clearSession();
+  }, [clearSession]);
 
   const signOut = useCallback(async () => {
     const token = getStoredToken();
@@ -182,11 +216,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isPaidPlan: account?.is_paid_plan === true,
       entitlement,
       refresh,
+      expireSession,
       signIn,
       signUp,
       signOut,
     }),
-    [status, user, account, entitlement, refresh, signIn, signUp, signOut],
+    [
+      status,
+      user,
+      account,
+      entitlement,
+      refresh,
+      expireSession,
+      signIn,
+      signUp,
+      signOut,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

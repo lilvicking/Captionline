@@ -47,6 +47,63 @@ class EmailDeliveryError(Exception):
     """Raised when a provider could not deliver a message."""
 
 
+#: Resend's error envelope carries `name`, `statusCode`, and `message`. Only
+#: `name` and `code` are machine tokens that say nothing about the recipient;
+#: `message` routinely quotes the submitted address back, so it is never read.
+_SAFE_ERROR_FIELDS = ("name", "code")
+
+#: A structured error field is a short token, so anything longer than this is
+#: either not an error code or an attempt to smuggle content into the log.
+MAX_ERROR_FIELD_CHARS = 120
+
+#: Upper bound on what is read from an error response, so a hostile or broken
+#: provider cannot make this handler buffer an unbounded response.
+MAX_ERROR_BODY_BYTES = 2048
+
+
+def _safe_error_fields(exc: urllib.error.HTTPError) -> str:
+    """Summarise a provider error using only its structured, machine fields.
+
+    The previous version deliberately never read the body at all, which is safe
+    but left an operator with nothing but "status 422" when a send failed. The
+    compromise is to read the body for exactly two JSON keys, `name` and `code`,
+    and never for `message`, the recipient address, or anything in the request
+    headers, where the API key lives. A body that is not a JSON object with those
+    keys yields an empty string and nothing extra is logged.
+    """
+    if getattr(exc, "fp", None) is None:
+        # urllib leaves fp unset when the error carries no body at all.
+        return ""
+
+    try:
+        raw = exc.read(MAX_ERROR_BODY_BYTES)
+    except Exception:  # pragma: no cover - reading must never mask the failure
+        return ""
+
+    try:
+        payload = json.loads(raw.decode("utf-8", "replace"))
+    except (AttributeError, ValueError):
+        return ""
+
+    if not isinstance(payload, dict):
+        return ""
+
+    parts: list[str] = []
+
+    for field_name in _SAFE_ERROR_FIELDS:
+        value = payload.get(field_name)
+
+        if value is None or isinstance(value, bool) or isinstance(value, (list, dict)):
+            continue
+
+        text = str(value).strip()
+
+        if text:
+            parts.append(f"{field_name}={text[:MAX_ERROR_FIELD_CHARS]}")
+
+    return " ".join(parts)
+
+
 class EmailProvider(Protocol):
     """Minimal provider contract."""
 
@@ -92,8 +149,16 @@ class ResendProvider:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 status = getattr(response, "status", 200)
         except urllib.error.HTTPError as exc:
-            # Status only. The body can echo the submitted address, and the
-            # request headers (which hold the key) are never read.
+            # The request headers (which hold the key) are never touched, and
+            # only the provider's machine-readable error fields are logged.
+            detail = _safe_error_fields(exc)
+
+            logger.warning(
+                "%s rejected the message with status %s%s",
+                self.name,
+                exc.code,
+                f" ({detail})" if detail else "",
+            )
             raise EmailDeliveryError(
                 f"{self.name} rejected the message with status {exc.code}"
             ) from None

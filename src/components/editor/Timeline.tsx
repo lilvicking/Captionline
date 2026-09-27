@@ -44,6 +44,11 @@ export function Timeline({
         {cues.map((cue) => {
           const left = toPercent(cue.start, span);
           const width = Math.max(toPercent(cue.end, span) - left, 0.6);
+          // A cue button is visually a block on the track with no text of its
+          // own, and the text can be empty, so it needs a name that works in
+          // both cases. title alone is not a reliable accessible name.
+          const label = cue.text.trim() === "" ? "(no text)" : cue.text.trim();
+          const spoken = `${label}, ${formatClock(cue.start)}`;
 
           return (
             <button
@@ -55,6 +60,8 @@ export function Timeline({
                 onSelect(cue.id);
                 onSeek(cue.start);
               }}
+              aria-label={`Jump to caption: ${spoken}`}
+              aria-pressed={cue.id === selectedId}
               title={cue.text}
             />
           );

@@ -5,6 +5,10 @@ Security posture
 * **No user enumeration.** `POST /api/auth/forgot-password` returns the same
   status, body, and timing shape whether or not the address is registered. The
   response text never confirms an account.
+* **No availability oracle either.** This used to answer 503 when the mail
+  provider failed and 200 for an unknown address, so the status code alone told
+  an attacker whether an address was registered. Every path now answers 200
+  with the same message and the failure is recorded server-side only.
 * **Single-use, expiring, hashed tokens.** Only a SHA-256 hash of the emailed
   token is stored. Consuming one takes a row lock, so a token cannot be redeemed
   twice even under concurrent requests.
@@ -12,15 +16,13 @@ Security posture
   login session and every other outstanding reset token, so a compromised session
   does not survive the reset.
 * **Nothing sensitive is logged.** No passwords, no raw tokens, no Authorization
-  headers, no provider keys.
+  headers, no provider keys, and no email addresses.
 """
 
 from __future__ import annotations
 
 import logging
-from collections import defaultdict, deque
 from datetime import datetime, timezone
-from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -30,6 +32,7 @@ from ..config import get_settings
 from ..db.models import User
 from ..db.session import get_db
 from ..email import EmailDeliveryError, get_provider
+from ..ratelimit import allow, enforce, reset_rate_limits
 from ..security.deps import get_current_user, require_database
 from ..security.passwords import (
     PasswordTooShortError,
@@ -53,7 +56,6 @@ from ..security.schemas import (
     MessageResponse,
     ResetPasswordRequest,
 )
-from ..security.tokens import hash_token
 
 logger = logging.getLogger(__name__)
 
@@ -71,72 +73,14 @@ CHANGE_PASSWORD_MESSAGE = "Your password has been changed."
 INCORRECT_CURRENT_PASSWORD = "Your current password is incorrect."
 
 
-# --- Per-client-address throttle -------------------------------------------
-#
-# Applied before any database work, so a flood costs nothing and needs no stored
-# personal data. It is in-process and therefore best effort: it resets on restart
-# and is per replica. The per-account limits in `reset_tokens` are the durable
-# half of the protection.
-_ip_hits: dict[str, deque] = defaultdict(deque)
-_ip_lock = Lock()
-
-
-def _client_address(request: Request) -> str:
-    """Best-effort client address, used only as an in-memory rate-limit bucket.
-
-    A spoofable `X-Forwarded-For` value is acceptable here: the key only needs to
-    be hard for one attacker to vary, and correctness does not depend on it.
-    """
-    forwarded = request.headers.get("X-Forwarded-For")
-
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-
-    return request.client.host if request.client else "unknown"
-
-
-def _is_ip_limited(request: Request) -> bool:
-    settings = get_settings()
-    limit = settings.password_reset_ip_limit
-    window = settings.password_reset_ip_window_seconds
-
-    if limit <= 0 or window <= 0:
-        return False
-
-    address = _client_address(request)
-    now = datetime.now(timezone.utc).timestamp()
-    cutoff = now - window
-
-    with _ip_lock:
-        hits = _ip_hits[address]
-        while hits and hits[0] < cutoff:
-            hits.popleft()
-        limited = len(hits) >= limit
-        if not limited:
-            hits.append(now)
-
-    return limited
-
-
 def reset_ip_throttle() -> None:
-    """Clear the in-memory throttle. Used by tests."""
-    with _ip_lock:
-        _ip_hits.clear()
+    """Clear the in-memory throttles. Used by tests.
 
-
-def _client_error(exc: EmailDeliveryError) -> HTTPException:
-    """Map a delivery failure to a neutral response.
-
-    The reset flow returns 200 even when mail could not be sent, so a caller
-    cannot distinguish a delivery outage from "no such account".
+    Kept under its original name because it is imported by the test suite. The
+    address counters it used to reset now live in `app.ratelimit`, which is
+    bounded, prunes itself, and no longer trusts a spoofable forwarded header.
     """
-    logger.warning("Password reset email could not be delivered: %s", exc)
-    return HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=(
-            "Password reset is temporarily unavailable. Please try again later."
-        ),
-    )
+    reset_rate_limits()
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
@@ -147,14 +91,19 @@ def forgot_password(
 ) -> ForgotPasswordResponse:
     """Start a password reset.
 
-    Always answers with the same message, whether the address is unknown, the
-    account is inactive, the request is rate limited, or email is not configured.
+    Always answers 200 with the same message, whether the address is unknown,
+    the account is inactive, the request was rate limited, email is not
+    configured, or delivery failed.
     """
     require_database()
 
-    # Throttled first, so an abusive client never reaches the database.
-    if _is_ip_limited(request):
-        logger.info("Password reset request throttled by client address")
+    # Throttled first, so an abusive client never reaches the database. This
+    # answers with the same generic 200 rather than a 429: a 429 would reveal
+    # that the address is under observation, which is itself an enumeration
+    # signal. Per-account cooldown and cap live in the database
+    # (`reset_tokens.is_rate_limited`) and are the durable half of the control.
+    if not allow("forgot-password", request, account=payload.email):
+        logger.info("Password reset request throttled")
         return ForgotPasswordResponse(message=FORGOT_PASSWORD_MESSAGE)
 
     email = payload.email.strip().lower()
@@ -187,24 +136,51 @@ def forgot_password(
     try:
         provider.send(message)
     except EmailDeliveryError as exc:
-        # Withdraw the token so a link that was never delivered cannot be used.
-        revoke_all_reset_tokens(db, user.id)
-        db.commit()
-        raise _client_error(exc) from None
+        _record_delivery_failure(db, user, "provider rejected the message", exc)
+        return ForgotPasswordResponse(message=FORGOT_PASSWORD_MESSAGE)
     except Exception as exc:  # pragma: no cover - unexpected provider failure
-        revoke_all_reset_tokens(db, user.id)
-        db.commit()
-        logger.warning("Unexpected email provider failure: %s", type(exc).__name__)
-        raise _client_error(
-            EmailDeliveryError(f"provider raised {type(exc).__name__}")
-        ) from None
+        _record_delivery_failure(db, user, "provider raised", exc)
+        return ForgotPasswordResponse(message=FORGOT_PASSWORD_MESSAGE)
 
     return ForgotPasswordResponse(message=FORGOT_PASSWORD_MESSAGE)
+
+
+def _record_delivery_failure(
+    db: OrmSession, user: User, summary: str, exc: Exception
+) -> None:
+    """Withdraw an undelivered token and log the failure, then return normally.
+
+    The caller still replies with the generic 200. A previous version raised a
+    503 here, which leaked whether an address was registered: an unknown address
+    always produced 200, a registered one produced 503 as soon as the mail
+    provider hiccuped. Operators lose nothing here because the failure is logged
+    with the user id, the error class, and the reason; the user is not told
+    anything an attacker could not already guess.
+
+    No address, token, or provider payload is written to the log.
+    """
+    # Withdraw the token so a link that was never delivered cannot be used.
+    revoke_all_reset_tokens(db, user.id)
+
+    try:
+        db.commit()
+    except Exception:  # pragma: no cover - the token is already void
+        db.rollback()
+        logger.warning("Could not withdraw an undelivered password reset token")
+
+    logger.error(
+        "Password reset email could not be delivered (%s): %s for user_id=%s. "
+        "The caller still receives the generic response.",
+        summary,
+        type(exc).__name__,
+        user.id,
+    )
 
 
 @router.post("/reset-password", response_model=MessageResponse)
 def reset_password(
     payload: ResetPasswordRequest,
+    request: Request,
     db: OrmSession = Depends(get_db),
 ) -> MessageResponse:
     """Redeem a reset token and set a new password.
@@ -213,6 +189,11 @@ def reset_password(
     probed for validity, expiry, or prior use.
     """
     require_database()
+
+    # The token is the only credential here, so the throttle is per address:
+    # redemption is what actually changes a password, and brute-forcing it is
+    # the abuse worth stopping.
+    enforce("reset-password", request)
 
     settings = get_settings()
 
@@ -238,6 +219,7 @@ def reset_password(
 @router.post("/change-password", response_model=MessageResponse)
 def change_password(
     payload: ChangePasswordRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: OrmSession = Depends(get_db),
 ) -> MessageResponse:
@@ -247,6 +229,10 @@ def change_password(
     a stolen token cannot outlive the change.
     """
     require_database()
+
+    # Per address and per account: a hijacked session guessing the current
+    # password must not be able to grind through it unhindered.
+    enforce("change-password", request, account=str(user.id))
 
     settings = get_settings()
 

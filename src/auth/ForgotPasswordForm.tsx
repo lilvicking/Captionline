@@ -7,9 +7,11 @@ type ForgotPasswordFormProps = {
 };
 
 /** Generic confirmation. Must match the backend wording so it never implies
- * whether the address is registered. */
+ *  whether the address is registered. */
 const CONFIRMATION =
   "If an account exists for that email, we've sent a password reset link.";
+
+const ERROR_ID = "forgot-password-error";
 
 export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps) {
   const [email, setEmail] = useState("");
@@ -80,12 +82,14 @@ export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps) {
             required
             value={email}
             onChange={(event) => setEmail(event.target.value)}
+            aria-invalid={error !== null}
+            aria-describedby={error ? ERROR_ID : undefined}
           />
         </span>
       </label>
 
       {error ? (
-        <p className="account__error" role="alert">
+        <p className="account__error" id={ERROR_ID} role="alert">
           {error}
         </p>
       ) : null}

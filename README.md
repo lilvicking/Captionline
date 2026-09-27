@@ -82,10 +82,20 @@ the local 30-second free tier.
   the only source of paid entitlement.
 - **Real pricing** — Free, Creator ($19), Pro ($39), and Creator Annual ($149, billed annually),
   served from the backend catalogue so the frontend never hardcodes prices.
+- **Account deletion** — a `Delete my account` control in the account panel, behind the current
+  password and a typed confirmation word. An active subscription must be canceled through the Stripe
+  portal first, so the deletion blocks with `409` rather than silently ending a subscription
+  server-side.
+- **Published legal pages** — `/terms`, `/privacy`, and `/contact` at real routes, with the
+  recorded Terms and Privacy versions and effective dates served from `GET /api/legal/versions`
+  rather than hardcoded in the frontend.
+- **Security posture** — security response headers on every response, request rate limiting on the
+  sensitive and metered endpoints, and a production configuration gate. See
+  [Security posture](#security-posture).
 
 **Finished-video rendering still does not exist.** Paid plans carry the export *entitlement*; the
-button stays disabled and says so plainly. Nothing is faked. Transcription is **not** gated by login yet, so the existing upload
-flow keeps working.
+button stays disabled and says so plainly. Nothing is faked. Transcription **is** gated by login
+now, so an upload requires an account and a signed-out visitor is asked to create one.
 
 ## What is NOT implemented yet
 
@@ -94,12 +104,43 @@ Nothing below exists yet, by design:
 - No finished-video rendering (paid plans carry the entitlement only)
 - No email verification of new addresses
 - No social/OAuth login
-- No account deletion
 - No Google Drive or other cloud storage integration
-- No permanent media storage (uploads are temporary and deleted immediately)
+- No permanent media storage (uploads live in a per-request temporary directory and are deleted when
+  processing ends)
 - No speaker diarization, no translation, no analytics
 - No background job queue, so very long videos on CPU may exceed a proxy timeout
-- No final pricing. Plan names are placeholders and no prices are published.
+- No published refund policy, and no published governing law or support address. The Terms say so
+  plainly rather than naming one, so they must be settled before paid subscriptions are offered
+
+## Security posture
+
+Added after the first commercial pass, and described in full in
+[`backend/README.md`](backend/README.md).
+
+- **Security response headers** on every response (`app/headers.py`): `X-Content-Type-Options`,
+  `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, a deny-by-default
+  `Content-Security-Policy`, and `Strict-Transport-Security` over HTTPS only. Endpoints that return
+  a token or a password-reset outcome also send `Cache-Control: no-store`.
+- **Rate limiting** (`app/ratelimit.py`) on registration, login, transcription, checkout, portal,
+  change-password, reset-password, forgot-password, and account deletion. Each limit is applied per
+  client address *and* per account, so rotating addresses does not defeat it. The unauthenticated
+  buckets also keep a shared counter in the database, so the budget is fleet-wide rather than per
+  replica. The client address comes from the socket peer unless `TRUST_PROXY_HEADERS` is explicitly
+  enabled, because `X-Forwarded-For` is otherwise client-controlled.
+- **`APP_ENV`** is the switch for the production configuration gate. It defaults to `development`,
+  and **production must set it to `production`**, or the gate below never runs.
+- **The production gate** (`assert_production_ready`) refuses to start at all when `APP_ENV` is
+  `production` and the configuration is unsafe: a wildcard `CORS_ORIGINS`, the `console` or
+  `memory` email provider (which print reset tokens to the log), `DATABASE_ECHO` (which logs
+  password and token hashes as SQL bind parameters), an `FRONTEND_URL` that is empty, not
+  `https://`, or localhost, or Stripe set with a non-https `FRONTEND_URL`, or `resend` with no
+  `EMAIL_API_KEY`. Failing at startup is far cheaper than finding out during an incident.
+- **Temp-file sweeping.** Each request deletes its own working directory in a `finally` block, so
+  the normal and failure paths both clean up. If the process is killed outright the `finally`
+  cannot run, so a startup sweep deletes any leftover `captionline-*` directory older than
+  `TEMP_SWEEP_MAX_AGE_SECONDS` (24 hours by default). That is the real bound on how long an
+  uploaded file can survive an abnormal termination, and the Privacy Policy says exactly that
+  rather than claiming deletion is immediate.
 
 ## Authentication architecture
 
@@ -200,6 +241,33 @@ the log stream.
 > Because the reset link is a real path, the Railway web service needs an SPA rewrite so
 > `/reset-password` serves `index.html` on a direct load. The Vite dev server already does this.
 
+### Frontend routes and session storage
+
+Captionline has no router dependency, so `src/auth/route.ts` adds just enough History API support
+for the paths that must survive a full page load — an emailed link, a bookmark, or a hard refresh:
+
+| Route | Page | Notes |
+| ----- | ---- | ----- |
+| `/reset-password` | `ResetPasswordPage` | The emailed link target. Must be a real route |
+| `/terms` | `TermsPage` | Terms of Service, with the recorded version and effective date |
+| `/privacy` | `PrivacyPage` | Privacy Policy, same |
+| `/contact` | `ContactPage` | Support contact. Not a versioned document, so it shows no version line |
+
+`VITE_SUPPORT_EMAIL` and `VITE_GOVERNING_LAW` are the only frontend values the legal pages read,
+and both are optional: unset, the pages say support is not yet available and that the governing law
+is not published yet, rather than inventing an address or a jurisdiction. Both must be set, and the
+SPA rewrite above must be in place, before launch.
+
+**Session storage: deferred, deliberately.** The session is still an opaque bearer token kept in
+`localStorage` under `captionline.session.token` and sent as `Authorization: Bearer`. httpOnly
+`SameSite=None; Secure` cookies plus CSRF protection is the real hardening, and it is **explicitly
+deferred rather than overlooked**: `SameSite=None` cookies are rejected on cross-site requests, so
+the migration only becomes possible once the custom domain is attached to both services, and the
+cross-site cookie + CSRF work is a large change to every authenticated endpoint. Making that change
+immediately before launch would be a much larger risk than the exposure it removes, on a codebase
+with no integration tests for a cookie flow. It is a documented follow-up, gated on the domain being
+attached — not an oversight. See the authentication tradeoff note above.
+
 ## Stripe architecture
 
 **Stripe is the authority for paid access.** Creating a Checkout session changes nothing — a
@@ -287,15 +355,21 @@ more restrictive answer whenever it is unsure.
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
-├── .env.example                # VITE_API_URL for the frontend
+├── .env.example                # VITE_API_URL, VITE_SUPPORT_EMAIL, VITE_GOVERNING_LAW
 ├── .env.local                  # local overrides (git-ignored)
 ├── README.md
+├── public/
+│   └── _redirects              # SPA rewrite for Netlify-style hosts
 ├── backend/                    # Phases 2-3 service
 │   ├── alembic/                # Migration environment + revisions
 │   ├── alembic.ini
 │   ├── app/
-│   │   ├── main.py             # FastAPI app, CORS, health, transcribe gate
+│   │   ├── main.py             # FastAPI app, CORS, health, transcribe gate, lifespan checks
 │   │   ├── config.py           # Env-driven settings
+│   │   ├── headers.py          # Security response headers
+│   │   ├── ratelimit.py        # In-process + durable request budgets
+│   │   ├── email.py            # Transactional email provider abstraction
+│   │   ├── terms.py            # Legal versions, support mailbox, governing-law placeholder
 │   │   ├── schemas.py          # Response models
 │   │   ├── transcribe.py       # WhisperX lifecycle + output normalization
 │   │   ├── plans.py            # Plan catalogue (single source of truth)
@@ -303,7 +377,7 @@ more restrictive answer whenever it is unsure.
 │   │   ├── media.py            # ffprobe duration measurement
 │   │   ├── stripe_client.py    # Stripe client, checkout, signature verification
 │   │   ├── db/                 # SQLAlchemy base, models, session
-│   │   ├── routers/            # auth.py, account.py, billing.py
+│   │   ├── routers/            # auth.py, password_reset.py, account.py, billing.py
 │   │   └── security/           # Argon2id, tokens, dependencies, sessions
 │   ├── tests/                  # pytest suite
 │   ├── requirements.txt
@@ -317,18 +391,28 @@ more restrictive answer whenever it is unsure.
     ├── index.css                 # Design tokens and all styles
     ├── types.ts                  # CaptionCue, CaptionWord, the CaptionStyle model
     ├── entitlement.ts            # Preview entitlement policy + server bridge
-    ├── vite-env.d.ts             # VITE_API_URL typing
+    ├── vite-env.d.ts             # VITE_* typing
     ├── auth/
     │   ├── AuthContext.tsx       # Session state + resolved entitlement
-    │   └── AccountPanel.tsx      # Sign up / log in / usage
+    │   ├── AccountPanel.tsx      # Sign up / log in / usage / delete account
+    │   ├── ForgotPasswordForm.tsx
+    │   ├── ResetPasswordPage.tsx # /reset-password, the emailed-link target
+    │   └── route.ts              # History API routing for the real-path routes
     ├── data/
     │   ├── sampleCaptions.ts     # Local fallback caption track
     │   ├── captionFonts.ts       # Font id -> CSS stack registry
     │   └── captionPresets.ts     # One-click CaptionStyle presets
+    ├── legal/
+    │   ├── config.ts             # VITE_SUPPORT_EMAIL / VITE_GOVERNING_LAW, and the safe fallbacks
+    │   ├── LegalPage.tsx         # Shared document shell (version line, TOC)
+    │   ├── TermsPage.tsx         # /terms
+    │   ├── PrivacyPage.tsx       # /privacy
+    │   └── ContactPage.tsx       # /contact
     ├── lib/
     │   ├── api.ts                # Transcription client + response -> cue mapping
     │   ├── auth.ts               # Account API client + token storage
     │   ├── billing.ts            # Plan catalogue, checkout, portal
+    │   ├── legal.ts              # GET /api/legal/versions reader
     │   ├── srt.ts                # .srt generation + client-side download
     │   ├── color.ts              # Hex validation / alpha conversion
     │   ├── text.ts               # Greedy caption line/word wrapping
@@ -338,7 +422,7 @@ more restrictive answer whenever it is unsure.
         ├── Hero.tsx
         ├── UploadZone.tsx        # Click-to-select + drag/drop + video validation
         ├── HowItWorks.tsx
-        ├── Pricing.tsx           # Placeholder only, no prices
+        ├── Pricing.tsx           # Real plan catalogue, no hardcoded prices
         ├── Footer.tsx
         ├── ProcessingState.tsx   # Real transcription progress + fallback notice
         └── editor/
@@ -446,7 +530,15 @@ Run the backend tests (they use the real migration against a temporary SQLite da
 PostgreSQL server is needed):
 
 ```bash
+cd backend
 pytest
+```
+
+`backend/pytest.ini` sets `pythonpath = .`, so the suite also runs from the repository root without
+changing anything else:
+
+```bash
+backend\.venv\Scripts\python.exe -m pytest backend\tests
 ```
 
 Full backend documentation, model configuration, and Railway deployment:
@@ -473,29 +565,39 @@ npm run preview
 | Variable | Purpose |
 | -------- | ------- |
 | `VITE_API_URL` | Base URL of the transcription service. Production example: `https://<backend>.up.railway.app` |
+| `VITE_SUPPORT_EMAIL` | Monitored support address published on `/contact` and the legal pages. Unset means the pages say support is not yet available |
+| `VITE_GOVERNING_LAW` | The law and forum the Terms are governed by. Unset means the Terms say the clause is not published yet |
 
 Only `VITE_`-prefixed variables reach the browser bundle, so no secret ever belongs in this file.
+None of the three is a secret: all three are printed on a public page.
 
 ### Backend
 
-Server-side configuration lives in `backend/.env.example`:
+`backend/.env.example` is the complete list — every variable the service reads, with its safe
+default and whether it is a secret. The most important one is not obvious from a variable name:
 
 | Variable | Purpose |
 | -------- | ------- |
+| `APP_ENV` | **Production must set this to `production`.** Any other value (it defaults to `development`) means the production configuration gate never runs. See [Security posture](#security-posture) |
 | `DATABASE_URL` | PostgreSQL in production (`${{Postgres.DATABASE_URL}}`), optional locally |
 | `EMAIL_PROVIDER` | `resend` in production; `console`/`memory` are dev and test only |
 | `EMAIL_API_KEY` | Resend API key. Server side only |
 | `EMAIL_FROM` | Verified sender, e.g. `Captionline <no-reply@captionline.pro>` |
+| `SUPPORT_EMAIL` | Monitored support mailbox, reported by `GET /api/legal/versions`. Keep aligned with `VITE_SUPPORT_EMAIL` |
 | `PASSWORD_RESET_TTL_MINUTES` | Reset link lifetime (default 60) |
 | `PASSWORD_RESET_COOLDOWN_SECONDS` | Per-account cooldown between reset requests |
 | `PASSWORD_RESET_MAX_ACTIVE` | Cap on outstanding reset tokens per account |
-| `PASSWORD_RESET_IP_LIMIT` | Per-address throttle (best effort, per process) |
+| `PASSWORD_RESET_IP_LIMIT` | Per-address throttle on forgot-password (default 5/900s) |
+| `RATE_LIMIT_*` | Per-endpoint limits and windows: register, login, transcribe, checkout, portal, change-password, reset-password, delete-account. Plus `RATE_LIMIT_MAX_KEYS`, `RATE_LIMIT_DURABLE_ENABLED`, and `RATE_LIMIT_DURABLE_PRUNE_INTERVAL_SECONDS` |
+| `TRUST_PROXY_HEADERS` | Whether `X-Forwarded-For` may be used for rate-limit keys. Only enable behind a proxy that overwrites it |
+| `HSTS_ENABLED` | Force HSTS on/off. Unset means "only over HTTPS" |
+| `TEMP_SWEEP_MAX_AGE_SECONDS` | Age at which a work directory left by a killed request is swept at startup (default 86400) |
 | `STRIPE_SECRET_KEY` | Stripe API key. Absent means billing reports "not configured" |
 | `STRIPE_WEBHOOK_SECRET` | Verifies webhook signatures |
 | `STRIPE_PRICE_CREATOR_MONTHLY` | Price ID for Creator |
 | `STRIPE_PRICE_PRO_MONTHLY` | Price ID for Pro |
 | `STRIPE_PRICE_CREATOR_ANNUAL` | Price ID for Creator Annual |
-| `FRONTEND_URL` | Absolute frontend origin for Stripe redirects |
+| `FRONTEND_URL` | Absolute frontend origin for Stripe redirects and reset links |
 | `SESSION_TTL_DAYS` | Bearer session lifetime |
 | `MIN_PASSWORD_LENGTH` | Minimum registration password length |
 | `WHISPERX_MODEL` | Transcription model |
@@ -505,8 +607,10 @@ Server-side configuration lives in `backend/.env.example`:
 | `FFPROBE_PATH` | `ffprobe` location, used to measure real duration |
 | `PORT` | Supplied by Railway |
 
-These must **not** be prefixed with `VITE_`. `DATABASE_URL` and the Stripe values are the only
-secrets, and the platform supplies them.
+These must **not** be prefixed with `VITE_`. The four secrets in the system are **`DATABASE_URL`,
+`EMAIL_API_KEY`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`**, and nothing else: the WhisperX
+models are public, and every other setting is a non-sensitive deployment value. The platform
+supplies them; none is ever committed.
 
 ## Railway deployment
 
@@ -528,6 +632,9 @@ Set on the Railway API service:
 # REQUIRED
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 
+# REQUIRED FOR PRODUCTION - without it the startup safety gate never runs
+APP_ENV=production
+
 # STRIPE REQUIRED (for live billing; the service runs without them)
 STRIPE_SECRET_KEY=...
 STRIPE_WEBHOOK_SECRET=...
@@ -538,6 +645,9 @@ STRIPE_PRICE_CREATOR_ANNUAL=...
 # RECOMMENDED
 FRONTEND_URL=https://<your-frontend-domain>
 CORS_ORIGINS=https://<your-frontend-domain>
+EMAIL_PROVIDER=resend
+EMAIL_API_KEY=...
+SUPPORT_EMAIL=...
 WHISPERX_MODEL=small
 WHISPERX_DEVICE=cpu
 WHISPERX_COMPUTE_TYPE=int8
@@ -545,16 +655,22 @@ MAX_UPLOAD_MB=500
 SESSION_TTL_DAYS=30
 ```
 
-Then set `VITE_API_URL` on the frontend to the Railway backend URL and rebuild the frontend. No
-source change is needed to switch environments.
+Then set `VITE_API_URL` on the frontend to the Railway backend URL and rebuild the frontend, and set
+`VITE_SUPPORT_EMAIL` and `VITE_GOVERNING_LAW` before offering paid subscriptions. No source change is
+needed to switch environments.
 
 **Deployment order:** migrations → API → web (`VITE_API_URL`) → `CORS_ORIGINS`/`FRONTEND_URL` →
-Stripe variables and webhook.
+`APP_ENV=production` → Stripe variables and webhook. Set `APP_ENV` **after** the variables it checks
+(`CORS_ORIGINS`, `FRONTEND_URL`, `EMAIL_*`), because setting it earlier makes the service refuse to
+boot until they are correct.
 
 **Migration safety:** the schema is only ever changed by a reviewed Alembic revision. `create_all`
 is never used against a live database, so a deploy cannot silently reshape a table. `0002` is purely
-additive (one column, two tables), so an application rollback stays safe; a schema rollback would
-discard in-flight usage holds and the webhook idempotency log.
+additive (one column, two tables) and `0003`–`0005` are additive too: `0003` adds the password-reset
+table, `0004` adds four **nullable** consent columns with no backfill, and `0005` adds the
+rate-limit bucket table. An application rollback therefore stays safe against a migrated schema; a
+schema rollback would discard in-flight usage holds, password-reset tokens, recorded legal
+consents, and the webhook idempotency log.
 
 **Custom domain:** nothing depends on a Railway hostname. Attach the domain to both services, set
 `CORS_ORIGINS` and `FRONTEND_URL` to it, rebuild the web app, and register the webhook against the

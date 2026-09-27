@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -13,6 +14,7 @@ from ..config import get_settings
 from ..db.models import Session as SessionModel
 from ..db.models import User
 from ..db.session import get_db
+from ..ratelimit import enforce
 from ..usage import add_months, apply_plan_to_user, period_start_for
 from ..security.deps import (
     INVALID_CREDENTIALS,
@@ -29,12 +31,24 @@ from ..security.passwords import (
 )
 from ..security.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 from ..security.tokens import generate_token, hash_token
+from ..terms import PRIVACY_VERSION, TERMS_VERSION
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 EMAIL_TAKEN = "An account with that email already exists."
+
+#: A real Argon2id hash of a value nobody can present, computed once at import.
+#:
+#: Argon2id at 64 MiB costs tens of milliseconds by design. Verifying only when
+#: the account exists therefore made a login for an unknown address return
+#: roughly a hundred times faster than a login for a known one, which is a
+#: usable account-enumeration oracle on its own, whatever the response body
+#: says. Paying the same cost on both paths removes the difference. The hash is
+#: not a secret: it is a well-formed hash of a value that is not a password, so
+#: a real candidate can never match it.
+DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
 
 
 def _normalize_email(email: str) -> str:
@@ -67,12 +81,19 @@ def _token_response(user: User, token: str, expires_at: datetime) -> TokenRespon
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: OrmSession = Depends(get_db)) -> TokenResponse:
+def register(
+    payload: RegisterRequest,
+    request: Request,
+    db: OrmSession = Depends(get_db),
+) -> TokenResponse:
     """Create an account on the free plan and issue a session."""
     require_database()
 
     settings = get_settings()
     email = _normalize_email(payload.email)
+
+    # Throttled per address and per account before any hashing or database work.
+    enforce("register", request, account=email)
 
     try:
         validate_password_strength(payload.password, settings.min_password_length)
@@ -97,6 +118,23 @@ def register(payload: RegisterRequest, db: OrmSession = Depends(get_db)) -> Toke
         usage_period_ends_at=add_months(period_start, 1),
     )
 
+    # Record the consent the client reported, and nothing more. The version comes
+    # from `app/terms.py` and never from the request, so a client cannot claim
+    # acceptance of a version that is not the one on display.
+    #
+    # Absent consent leaves the columns NULL and is not an error. Blocking
+    # registration on it, or gating login on it, would retroactively lock out
+    # every account created before these columns existed: nobody agreed to text
+    # that did not exist when they signed up. The frontend presents the
+    # agreement; the backend only remembers what was asserted.
+    if payload.accepted_terms:
+        user.terms_accepted_at = now
+        user.terms_version = TERMS_VERSION
+
+    if payload.acknowledged_privacy:
+        user.privacy_acknowledged_at = now
+        user.privacy_version = PRIVACY_VERSION
+
     # Seeds plan, allowance, preview, and export columns from app/plans.py.
     apply_plan_to_user(user)
 
@@ -112,17 +150,29 @@ def register(payload: RegisterRequest, db: OrmSession = Depends(get_db)) -> Toke
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: OrmSession = Depends(get_db)) -> TokenResponse:
+def login(
+    payload: LoginRequest,
+    request: Request,
+    db: OrmSession = Depends(get_db),
+) -> TokenResponse:
     """Exchange email and password for a session token."""
     require_database()
 
     email = _normalize_email(payload.email)
+
+    # Throttled per address and per account, so neither password spraying from
+    # one host nor one account sprayed from many hosts gets a free run at
+    # Argon2id.
+    enforce("login", request, account=email)
+
     user = db.scalar(select(User).where(User.email == email))
 
     # A missing account and a wrong password must be indistinguishable to the
-    # caller, so the same message and status are used for both.
-    stored_hash = user.password_hash if user is not None else ""
-    password_ok = verify_password(payload.password, stored_hash) if stored_hash else False
+    # caller, so the same message and status are used for both, and Argon2 runs
+    # on both paths so the two cannot be told apart by how long they take.
+    password_ok = verify_password(
+        payload.password, user.password_hash if user is not None else DUMMY_PASSWORD_HASH
+    )
 
     if user is None or not password_ok or not user.is_active:
         raise HTTPException(

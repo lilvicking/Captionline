@@ -89,6 +89,22 @@ class User(Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # --- Legal consent ---
+    # Recorded, never enforced. NULL means "we did not record an agreement",
+    # which is true of every account created before this existed and of anyone
+    # who registered without ticking the boxes. Nothing reads these columns to
+    # decide whether an account may sign in, so a NULL can never lock anybody
+    # out. The version strings label which published text was shown, so the
+    # text itself is never stored and can be replaced without a data migration.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terms_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    privacy_acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    privacy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow
     )
@@ -106,6 +122,23 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="selectin",
+    )
+
+    # The `ondelete="CASCADE"` on `usage_reservations.user_id` is enforced by the
+    # database, not by the ORM, and SQLite does not enforce foreign keys unless
+    # a caller turns `PRAGMA foreign_keys=ON`. Without this relationship
+    # `db.delete(user)` left orphaned allowance holds behind on every SQLite
+    # deployment, and on any production path that ever stopped relying on the
+    # database constraint. The ORM-level cascade makes deletion correct
+    # regardless of what the database enforces.
+    #
+    # Left on the default lazy strategy rather than `selectin` (as the two
+    # relationships above use): this collection is only ever needed when an
+    # account is deleted, and `selectin` would add a query to every
+    # authenticated request because `get_current_user` loads the user row.
+    usage_reservations: Mapped[list["UsageReservation"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
     )
 
     __table_args__ = (Index("ix_users_plan_status", "plan", "subscription_status"),)
@@ -188,6 +221,10 @@ class UsageReservation(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # See the note on `User.usage_reservations`: this pairing exists so the
+    # cascade works in the ORM, not only in the database.
+    user: Mapped["User"] = relationship(back_populates="usage_reservations")
+
     __table_args__ = (
         Index("ix_usage_reservations_user_status", "user_id", "status"),
     )
@@ -211,6 +248,38 @@ class StripeEvent(Base):
     processed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class RateLimitBucket(Base):
+    """One durable fixed window for a shared rate-limit counter.
+
+    The in-process limiter in `app.ratelimit` is per replica, so on a host
+    running several replicas an attacker who reaches all of them gets several
+    times the intended limit. This table holds the counter that is actually
+    shared, so the fleet-wide budget is the configured one. It is used only for
+    the abuse-critical unauthenticated endpoints (login, register,
+    forgot-password); the cheaper per-replica map stays in front of it as a
+    pre-filter.
+
+    `key` is `"<bucket>:<scope>:<subject>"` and is the primary key, so the
+    increment is a single atomic upsert and two replicas cannot both slip under
+    the limit. `window_started_at` is when the current window opened, which is
+    what makes the window fixed rather than sliding; a window older than the
+    longest configured bucket window can never be read again and is deleted by
+    the opportunistic prune in `app.ratelimit`.
+
+    The subjects stored here are the same ones the in-process limiter uses: a
+    client address, or the SHA-256 of an email address (never the address
+    itself). Nothing else about a caller is recorded.
+    """
+
+    __tablename__ = "rate_limit_buckets"
+
+    key: Mapped[str] = mapped_column(String(320), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class Session(Base):

@@ -19,6 +19,8 @@ type EditorProps = {
   setCues: Dispatch<SetStateAction<CaptionCue[]>>;
   transcription: TranscriptionMeta;
   onReset: () => void;
+  /** Opens the pricing plans, which live outside the editor stage. */
+  onShowPlans: () => void;
 };
 
 const DEFAULT_CUE_LENGTH_SECONDS = 2;
@@ -30,6 +32,7 @@ export function Editor({
   setCues,
   transcription,
   onReset,
+  onShowPlans,
 }: EditorProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -186,6 +189,7 @@ export function Editor({
             isPreviewLocked={isPreviewLocked}
             onPreviewLock={lockPreview}
             onPreviewUnlock={unlockPreview}
+            onShowPlans={onShowPlans}
             onVerticalPositionChange={handleVerticalPositionChange}
             onTimeUpdate={handleTimeUpdate}
             onLoadedMetadata={handleLoadedMetadata}
@@ -211,7 +215,7 @@ export function Editor({
             onReset={handleStyleReset}
           />
 
-          <ExportPanel cues={cues} videoName={videoName} />
+          <ExportPanel cues={cues} videoName={videoName} onShowPlans={onShowPlans} />
         </aside>
       </div>
 

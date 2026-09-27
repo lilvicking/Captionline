@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
-import { useAuth } from "../auth/AuthContext";
+import { isUnauthorized, useAuth } from "../auth/AuthContext";
+import { TERMS_PATH } from "../auth/route";
 import { getStoredToken } from "../lib/auth";
 import {
   fetchPlans,
@@ -16,8 +17,35 @@ const PERIOD_LABELS: Record<string, string> = {
   annual: "per year",
 };
 
+const SESSION_EXPIRED = "Your session expired. Please log in again.";
+
+/**
+ * Plain-language renewal disclosure, built from the plan the server returned.
+ *
+ * Nothing here is hardcoded per plan: the cadence comes from
+ * `plan.billing_period` and the allowance from the same payload, so the copy
+ * cannot drift away from what Stripe will actually charge.
+ */
+function renewalDisclosure(plan: Plan): string {
+  if (plan.price_usd === 0) {
+    return "Free. No card, no renewal, no charge.";
+  }
+
+  const minutes = Math.round(plan.usage_allowance_seconds / 60).toLocaleString();
+
+  if (plan.billing_period === "annual") {
+    return plan.usage_resets_monthly
+      ? `Renews annually until canceled. Includes ${minutes} processing minutes every month.`
+      : `Renews annually until canceled. Includes ${minutes} processing minutes.`;
+  }
+
+  return plan.usage_resets_monthly
+    ? `Renews monthly until canceled. Includes ${minutes} processing minutes every month.`
+    : `Renews monthly until canceled. Includes ${minutes} processing minutes.`;
+}
+
 export function Pricing() {
-  const { status, account, isPaidPlan, refresh } = useAuth();
+  const { status, account, isPaidPlan, refresh, expireSession } = useAuth();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
@@ -55,7 +83,7 @@ export function Pricing() {
 
     const token = getStoredToken();
     if (!token) {
-      setNotice("Your session expired. Please log in again.");
+      setNotice(SESSION_EXPIRED);
       return;
     }
 
@@ -73,6 +101,13 @@ export function Pricing() {
       // verified webhook updates the account on the server.
       window.location.assign(url);
     } catch (error) {
+      if (isUnauthorized(error)) {
+        // The server rejected the token, so stop claiming to be signed in.
+        expireSession();
+        setNotice(SESSION_EXPIRED);
+        return;
+      }
+
       setNotice(
         error instanceof Error
           ? error.message
@@ -86,6 +121,7 @@ export function Pricing() {
   const handleManage = async () => {
     const token = getStoredToken();
     if (!token) {
+      setNotice(SESSION_EXPIRED);
       return;
     }
 
@@ -98,6 +134,12 @@ export function Pricing() {
         window.location.assign(url);
       }
     } catch (error) {
+      if (isUnauthorized(error)) {
+        expireSession();
+        setNotice(SESSION_EXPIRED);
+        return;
+      }
+
       setNotice(error instanceof Error ? error.message : "The billing portal is unavailable.");
     } finally {
       setPortalBusy(false);
@@ -113,8 +155,10 @@ export function Pricing() {
           <p className="eyebrow">Pricing</p>
           <h2 className="section__title">Plans that scale with your channel</h2>
           <p className="section__lede">
-            Every plan includes full caption editing and the complete caption designer. Paid plans
-            unlock the finished preview and export.
+            Every plan includes full caption editing, the complete caption designer, and .srt subtitle
+            export. Paid plans unlock the finished preview and carry a finished-video export
+            entitlement — the rendering that turns a project into a video file is not available yet,
+            so nothing today produces an MP4.
           </p>
         </header>
 
@@ -174,6 +218,8 @@ export function Pricing() {
 
                   <p className="tier__description">{formatAllowance(plan)}</p>
 
+                  <p className="tier__renewal">{renewalDisclosure(plan)}</p>
+
                   <ul className="tier__features">
                     <li>
                       <Check size={14} aria-hidden="true" />
@@ -188,8 +234,8 @@ export function Pricing() {
                     <li>
                       <Check size={14} aria-hidden="true" />
                       {plan.can_export
-                        ? "Finished-video export entitlement"
-                        : "Finished-video export on paid plans"}
+                        ? "Finished-video export entitlement (renderer not yet available)"
+                        : "Finished-video export entitlement on paid plans"}
                     </li>
                     <li>
                       <Check size={14} aria-hidden="true" />
@@ -251,6 +297,17 @@ export function Pricing() {
             })}
           </div>
         )}
+
+        {/* Cancellation is stated here rather than buried: it is as much a part
+            of the offer as the price. */}
+        <p className="pricing__footnote">
+          Paid plans are a recurring subscription and renew automatically at the price shown until
+          you cancel. Cancel any time with <strong>Manage subscription</strong> in your account
+          panel: that stops future renewals, and your plan stays active until the end of the period
+          you have already paid for. Prices are in US dollars and exclude any tax or duty your
+          jurisdiction adds. See the <a href={TERMS_PATH}>Terms of Service</a> for refunds and the
+          full terms.
+        </p>
       </div>
     </section>
   );

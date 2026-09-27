@@ -395,10 +395,13 @@ def test_email_failure_is_handled_safely(client, mail, monkeypatch, db_session):
     monkeypatch.setattr(mail, "send", explode)
 
     response = client.post("/api/auth/forgot-password", json={"email": EMAIL})
+    unknown = client.post("/api/auth/forgot-password", json={"email": "nobody@example.com"})
 
-    # A neutral 503, never a 500 and never a token in the body.
-    assert response.status_code == 503
-    assert "temporarily unavailable" in response.json()["detail"]
+    # A delivery failure used to answer 503 while an unknown address answered
+    # 200, so the status code alone revealed which addresses were registered.
+    # Every path now answers with the identical generic response.
+    assert response.status_code == unknown.status_code == 200
+    assert response.json() == unknown.json() == {"message": FORGOT_PASSWORD_MESSAGE}
 
     # The undelivered token was withdrawn.
     rows = db_session.execute(select(PasswordResetToken)).scalars().all()

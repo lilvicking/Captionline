@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Lock } from "lucide-react";
 import { resetPassword } from "../lib/auth";
-import { navigateTo, readQueryParam } from "./route";
+import { navigateTo, readQueryParam, replaceUrlSilently, RESET_PASSWORD_PATH } from "./route";
 
 const MIN_PASSWORD_LENGTH = 8;
+
+/** Shared id so both fields can point `aria-describedby` at the one message. */
+const ERROR_ID = "reset-password-error";
 
 type State = "form" | "done";
 
@@ -37,11 +40,15 @@ export function ResetPasswordPage() {
 
     try {
       await resetPassword(token, password);
-      // Drop the token from the address bar once it has been redeemed.
-      navigateTo("/");
-      setState("done");
       setPassword("");
       setConfirm("");
+      // The confirmation renders first. Navigating here would unmount the page
+      // before the user ever saw it.
+      setState("done");
+      // The token is spent, so drop it from the address bar with replaceState:
+      // the page stays mounted, no history entry is added, and the raw token
+      // stops sitting in the URL (or in a referrer the user might share).
+      replaceUrlSilently(RESET_PASSWORD_PATH);
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -56,7 +63,7 @@ export function ResetPasswordPage() {
   if (state === "done") {
     return (
       <main className="authpage">
-        <div className="authpage__card">
+        <div className="authpage__card" role="status" aria-live="polite">
           <span className="authpage__icon authpage__icon--ok" aria-hidden="true">
             <CheckCircle2 size={24} />
           </span>
@@ -111,6 +118,8 @@ export function ResetPasswordPage() {
                   minLength={MIN_PASSWORD_LENGTH}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  aria-invalid={error !== null}
+                  aria-describedby={error ? ERROR_ID : undefined}
                 />
               </span>
             </label>
@@ -127,12 +136,14 @@ export function ResetPasswordPage() {
                   minLength={MIN_PASSWORD_LENGTH}
                   value={confirm}
                   onChange={(event) => setConfirm(event.target.value)}
+                  aria-invalid={error !== null}
+                  aria-describedby={error ? ERROR_ID : undefined}
                 />
               </span>
             </label>
 
             {error ? (
-              <p className="account__error" role="alert">
+              <p className="account__error" id={ERROR_ID} role="alert">
                 {error}
               </p>
             ) : null}

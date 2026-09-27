@@ -10,10 +10,12 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as OrmSession
 
 from ..config import get_settings
@@ -26,6 +28,7 @@ from ..plans import (
     has_active_paid_subscription,
     plan_for_price_id,
 )
+from ..ratelimit import enforce
 from ..security.deps import get_current_user
 from ..security.schemas import CheckoutResponse
 from ..stripe_client import (
@@ -51,6 +54,21 @@ WEBHOOK_SIGNATURE_INVALID = "Invalid Stripe signature."
 _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]+"), "[REDACTED_STRIPE_KEY]"),
     (re.compile(r"\bwhsec_[A-Za-z0-9]+"), "[REDACTED_WEBHOOK_SECRET]"),
+    # Resend keys. Billing failures do not normally carry one, but a
+    # misconfigured EMAIL_API_KEY echoed back in an upstream message would
+    # otherwise land in the log verbatim.
+    (re.compile(r"\bre_[A-Za-z0-9]{8,}"), "[REDACTED_EMAIL_API_KEY]"),
+    # Query-style and header-style credential pairs, for example
+    # "api_key=...&", "secret: ...", "token=...". Stripe puts the offending
+    # value in the first sentence for errors such as "Invalid API Key
+    # provided: sk_live_...", so truncation alone is never sufficient.
+    (
+        re.compile(
+            r"(?i)\b(?:api[-_]?key|secret|access[-_]?token|token|password)"
+            r"\s*[=:]\s*\"?[^\s\"'&,;]{4,}"
+        ),
+        "[REDACTED_CREDENTIAL]",
+    ),
     (re.compile(r"\bBearer\s+[A-Za-z0-9._\-]+"), "Bearer [REDACTED_TOKEN]"),
     (re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"), "[REDACTED_JWT]"),
     (re.compile(r"\b(?:\d[ -]?){13,19}\b"), "[REDACTED_CARD]"),
@@ -102,6 +120,7 @@ class CheckoutRequest(BaseModel):
 @router.post("/checkout", response_model=CheckoutResponse)
 def create_checkout(
     payload: CheckoutRequest,
+    request: Request,
     user: User = Depends(get_current_user),
     db: OrmSession = Depends(get_db),
 ) -> CheckoutResponse:
@@ -110,6 +129,8 @@ def create_checkout(
     Requires authentication. The amount comes from the server-configured Price
     ID for the requested plan; the client cannot influence it.
     """
+    enforce("checkout", request, account=str(user.id))
+
     if payload.plan not in PURCHASABLE_PLAN_IDS:
         raise HTTPException(status_code=400, detail=INVALID_PLAN)
 
@@ -125,6 +146,9 @@ def create_checkout(
             or None,
             success_url=f"{frontend}/?checkout=success&plan={payload.plan}",
             cancel_url=f"{frontend}/?checkout=cancelled&plan={payload.plan}",
+            # The authenticated account, so the completed session can be
+            # attributed back to it even for a first-time buyer.
+            account_reference=str(user.id),
         )
     except StripeNotConfigured as exc:
         # A configuration gap, not a user error. Billing UI shows this plainly.
@@ -147,9 +171,12 @@ def create_checkout(
 
 @router.post("/portal", response_model=CheckoutResponse)
 def create_portal(
+    request: Request,
     user: User = Depends(get_current_user),
 ) -> CheckoutResponse:
     """Open the Stripe Customer Portal for an account with a Stripe customer id."""
+    enforce("portal", request, account=str(user.id))
+
     customer_id = user.subscription_external_id
 
     if not customer_id or user.subscription_provider != "stripe":
@@ -207,8 +234,18 @@ def _find_user(
 ) -> User | None:
     """Locate the account a Stripe event refers to.
 
-    Never trusts an email in the payload for identity; matches only on the
-    identifiers Captionline itself previously stored.
+    Never trusts an email in the payload for identity; matches only on
+    identifiers Captionline itself previously stored or previously wrote into
+    the Stripe session.
+
+    The three identifiers are tried in order of trustworthiness:
+
+    1. `subscription_id` / `customer_id` - values we already mirrored, so they
+       are unambiguous.
+    2. `client_reference_id` - a value *we* put on the checkout session, so it is
+       server-chosen rather than client-chosen, and it is matched against the
+       primary key only. This is the only way a first-time buyer can be matched
+       at all, because before their first purchase no Stripe id is stored.
     """
     if subscription_id:
         user = db.scalar(
@@ -227,7 +264,33 @@ def _find_user(
         if user is not None:
             return user
 
+    if client_reference_id:
+        try:
+            account_id = int(str(client_reference_id).strip())
+        except (TypeError, ValueError):
+            account_id = None
+
+        if account_id is not None:
+            # Only ever the primary key, never a Stripe identifier column, so a
+            # crafted reference cannot be read as a stored Stripe id.
+            return db.get(User, account_id)
+
     return None
+
+
+def _epoch_seconds(value: Any) -> int | None:
+    """Coerce a Stripe timestamp to whole seconds, or None if it is unusable.
+
+    `int()` on a malformed or non-numeric value raised, and an exception in the
+    webhook became a 500 that Stripe retried until it disabled the endpoint. A
+    field we cannot read is simply not mirrored.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _apply_subscription(
@@ -255,15 +318,20 @@ def _apply_subscription(
         user.subscription_external_id = customer_id
 
     user.subscription_provider = "stripe"
-    user.subscription_status = (status_value or "incomplete").lower()
+    user.subscription_status = str(status_value or "incomplete").lower()
 
     if price_id:
         user.subscription_price_id = price_id
 
-    if current_period_end:
-        user.subscription_current_period_end = datetime.fromtimestamp(
-            int(current_period_end), tz=timezone.utc
-        )
+    period_end = _epoch_seconds(current_period_end)
+
+    if period_end is not None:
+        try:
+            user.subscription_current_period_end = datetime.fromtimestamp(
+                period_end, tz=timezone.utc
+            )
+        except (OverflowError, OSError, ValueError):
+            logger.warning("Ignoring an out-of-range current_period_end from Stripe")
 
     plan = plan_for_price_id(user.subscription_price_id)
     paid = has_active_paid_subscription(user.subscription_status)
@@ -283,7 +351,14 @@ def _apply_subscription(
         # Cancelled, unpaid, or an unmapped price: safely return to Free.
         # The account, its captions, and its usage history are preserved.
         apply_plan_to_user(user, "free")
-        user.subscription_price_id = user.subscription_price_id
+        # `subscription_price_id` is deliberately left as it is. It is the
+        # mirrored record of which Stripe price the subscription was on, and
+        # nothing reads it to decide access: the plan is already resolved above
+        # and re-applied to `user.plan`, which is the only entitlement input. So
+        # keeping or clearing it here is a data-retention choice, not a
+        # behaviour one, and keeping the last known price is the more useful
+        # mirror. It was previously written as a self-assignment, which did
+        # nothing at all.
 
     user.updated_at = now
 
@@ -306,6 +381,33 @@ def _period_should_reset(user: User, plan_id: str, now: datetime) -> bool:
     return abs((expected - ends_at).total_seconds()) > 1
 
 
+def _commit_idempotently(db: OrmSession, record: StripeEvent) -> bool:
+    """Persist the processed event, treating a lost race as a duplicate.
+
+    The `SELECT` above is only a fast path. Two deliveries of the same event
+    arriving at once can both see no row, and the loser then hits the unique
+    constraint on `stripe_events.event_id`. That surfaced as an `IntegrityError`
+    and therefore a 500, which made Stripe retry until it disabled the webhook
+    endpoint. The constraint is the real guard; catching the violation and
+    answering 200 keeps a race from becoming an outage.
+
+    Returns False when the commit lost, so the caller can report a duplicate.
+    """
+    record.processed_at = datetime.now(timezone.utc)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.info(
+            "Concurrent duplicate Stripe event %s; acknowledged as a duplicate",
+            record.event_id,
+        )
+        return False
+
+    return True
+
+
 @router.post("/webhook")
 async def stripe_webhook(
     request: Request,
@@ -315,7 +417,8 @@ async def stripe_webhook(
     """Handle a Stripe webhook.
 
     Requires a valid signature. Idempotent: the event id is recorded and a repeat
-    delivery is acknowledged without being applied twice.
+    delivery is acknowledged without being applied twice. This endpoint is never
+    rate limited, because Stripe must always be able to deliver.
     """
     payload = await request.body()
 
@@ -345,9 +448,9 @@ async def stripe_webhook(
     db.add(record)
 
     if event_type not in SUBSCRIPTION_EVENTS:
-        db.commit()
-        record.processed_at = datetime.now(timezone.utc)
-        db.commit()
+        # A single commit: the row and its processed_at go in together. The
+        # previous double commit here did no work and doubled the write load.
+        _commit_idempotently(db, record)
         return {"received": True, "handled": False}
 
     details = extract_subscription_details(event)
@@ -358,18 +461,22 @@ async def stripe_webhook(
             db,
             customer_id=details.get("customer_id"),
             subscription_id=details.get("subscription_id"),
-            client_reference_id=(event.get("data", {}).get("object", {}) or {}).get(
-                "client_reference_id"
-            ),
+            client_reference_id=details.get("client_reference_id"),
         )
 
         if user is not None:
             if event_type == "checkout.session.completed":
-                # Adopt the customer id Stripe just created for this account.
+                # A first-time buyer has no stored Stripe customer id yet: this is
+                # the only event that carries the id Stripe just created for
+                # them, so it has to be recorded here or the later
+                # customer.subscription.created event matches nobody and the
+                # customer stays on Free forever.
                 customer_id = details.get("customer_id")
+
                 if customer_id:
                     user.subscription_external_id = customer_id
                     user.subscription_provider = "stripe"
+
                 # Entitlement itself comes from subscription.* events, so that a
                 # browser round trip cannot grant access on its own.
             elif event_type == "customer.subscription.deleted":
@@ -399,7 +506,8 @@ async def stripe_webhook(
         else:
             logger.info("No account matched Stripe event %s (%s)", event_id, event_type)
 
-    record.processed_at = datetime.now(timezone.utc)
-    db.commit()
+    if not _commit_idempotently(db, record):
+        # A concurrent delivery of the same event won the race and applied it.
+        return {"received": True, "duplicate": True}
 
     return {"received": True, "handled": applied}

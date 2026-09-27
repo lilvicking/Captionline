@@ -11,7 +11,7 @@ type HeroProps = {
 const POINTS = [
   { icon: Wand2, text: "Timed captions generated in seconds" },
   { icon: Gauge, text: "Style, reposition, and export without re-rendering" },
-  { icon: Lock, text: "Uploaded media is deleted right after transcription" },
+  { icon: Lock, text: "Uploaded media is deleted after transcription" },
 ];
 
 export function Hero({ onFile, isAuthenticated, onRequestSignIn }: HeroProps) {

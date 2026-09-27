@@ -81,7 +81,7 @@ export function UploadZone({
         </p>
         <p className="dropzone__hint">
           {isAuthenticated
-            ? "Your file is sent to Captionline for transcription and deleted straight after. Nothing is stored."
+            ? "Your video is sent to Captionline for transcription and deleted from our server once it has been transcribed. It is never added to a media library and never used to train a model."
             : "Free accounts include 10 processing minutes a month and a 30-second finished preview."}
         </p>
 
@@ -111,6 +111,7 @@ export function UploadZone({
           className="visually-hidden"
           type="file"
           accept={ACCEPTED_TYPES}
+          aria-label="Choose a video file to transcribe"
           onChange={handleChange}
         />
       </div>

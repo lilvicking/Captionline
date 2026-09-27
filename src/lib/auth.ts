@@ -176,13 +176,55 @@ export async function resetPassword(
   await postJson<unknown>("/api/auth/reset-password", { token, new_password: newPassword });
 }
 
-/** Changes the password for the signed-in account. */
+/**
+ * Changes the password for the signed-in account.
+ *
+ * The token must be passed: this endpoint is authenticated, and omitting it
+ * sends no `Authorization` header, so the backend answers 401.
+ */
 export async function changePassword(
   currentPassword: string,
   newPassword: string,
+  token: string,
 ): Promise<void> {
-  await postJson<unknown>("/api/auth/change-password", {
-    current_password: currentPassword,
-    new_password: newPassword,
-  });
+  await postJson<unknown>(
+    "/api/auth/change-password",
+    {
+      current_password: currentPassword,
+      new_password: newPassword,
+    },
+    token,
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Account deletion                                                           */
+/* -------------------------------------------------------------------------- */
+
+/** Mirrors `AccountDeleteResponse` on the backend. */
+export type AccountDeleteResult = {
+  deleted: boolean;
+};
+
+/**
+ * Permanently deletes the signed-in account.
+ *
+ * The backend requires the current password and the literal confirmation word
+ * so an unattended browser cannot destroy an account, and answers 409 while a
+ * subscription is still active. Both conditions are enforced here as well so
+ * the user is not made to wait for a round trip to be told something the form
+ * already knows.
+ */
+export async function deleteAccount(
+  token: string,
+  currentPassword: string,
+  confirmation: string,
+): Promise<AccountDeleteResult> {
+  const payload = await postJson<AccountDeleteResult>(
+    "/api/account/delete",
+    { current_password: currentPassword, confirmation },
+    token,
+  );
+
+  return { deleted: payload?.deleted !== false };
 }

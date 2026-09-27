@@ -15,6 +15,9 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    sourcemap: true,
+    // Production must not ship the full unminified client source. Source maps
+    // stay off; turn them on locally only with `sourcemap: "inline"` or by
+    // running the dev server, which always maps.
+    sourcemap: false,
   },
 });

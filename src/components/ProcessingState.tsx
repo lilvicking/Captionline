@@ -120,7 +120,16 @@ export function ProcessingState({
 
         <h2 className="processing__title">{headline}</h2>
         <p className="processing__file">{fileName}</p>
-        <p className="processing__message">
+        {/*
+          The screen advances on its own after a failure, so the message is a
+          live region: a screen reader that is not watching the visual change
+          still hears why the transcription stopped.
+        */}
+        <p
+          className="processing__message"
+          role={isError ? "alert" : undefined}
+          aria-live={isError ? "assertive" : "polite"}
+        >
           {isError ? job?.message || fallbackMessage(reason) : job?.message ?? "Starting"}
         </p>
 
@@ -138,7 +147,7 @@ export function ProcessingState({
 
         {isError ? (
           <>
-            <p className="processing__note processing__note--error">
+            <p className="processing__note processing__note--error" role="status" aria-live="polite">
               <AlertTriangle size={16} aria-hidden="true" />
               <span>
                 {job?.detail || fallbackMessage(reason)}

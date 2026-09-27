@@ -7,9 +7,11 @@ import type { CaptionCue } from "../../types";
 type ExportPanelProps = {
   cues: CaptionCue[];
   videoName: string;
+  /** Opens the pricing plans, which live outside the editor stage. */
+  onShowPlans: () => void;
 };
 
-export function ExportPanel({ cues, videoName }: ExportPanelProps) {
+export function ExportPanel({ cues, videoName, onShowPlans }: ExportPanelProps) {
   const { account } = useAuth();
   const [showUpgradeNote, setShowUpgradeNote] = useState(false);
 
@@ -17,6 +19,18 @@ export function ExportPanel({ cues, videoName }: ExportPanelProps) {
   // which is treated as not entitled.
   const canExport = account?.can_export === true;
   const fileName = `${srtFileName(videoName)}.srt`;
+
+  /**
+   * Sends the reader to the pricing section on the landing page.
+   *
+   * The plans are not rendered inside the editor, and this panel has no way to
+   * start checkout itself, so the honest thing is to say where the plans are
+   * rather than to imply something happened here.
+   */
+  const findPlans = () => {
+    setShowUpgradeNote(true);
+    onShowPlans();
+  };
 
   return (
     <section className="panel">
@@ -40,9 +54,9 @@ export function ExportPanel({ cues, videoName }: ExportPanelProps) {
             Export video
           </button>
           <p className="panel__hint">
-            Your plan includes finished-video export. Rendering is not switched on yet, so this
-            button stays disabled until the rendering pipeline is connected. Nothing is rendered in
-            the meantime.
+            Your plan includes the finished-video export entitlement. Rendering is not switched on
+            yet, so this button stays disabled until the rendering pipeline is connected. Until
+            then, the .srt export above is the finished deliverable.
           </p>
         </>
       ) : (
@@ -50,13 +64,13 @@ export function ExportPanel({ cues, videoName }: ExportPanelProps) {
           <button
             className="button button--ghost button--block"
             type="button"
-            onClick={() => setShowUpgradeNote(true)}
+            onClick={findPlans}
           >
             <Sparkles size={16} aria-hidden="true" />
             Upgrade for video export
           </button>
           <p className="panel__hint">
-            Finished-video export is included with Creator and Pro. Subtitle (.srt) export above
+            Paid plans include the finished-video export entitlement. Subtitle (.srt) export above
             works on every plan.
           </p>
         </>
@@ -66,8 +80,10 @@ export function ExportPanel({ cues, videoName }: ExportPanelProps) {
         <p className="panel__note" role="status">
           <Film size={15} aria-hidden="true" />
           <span>
-            Paid plans include finished-video export. Plans and checkout are being finalised, so
-            nothing has been charged and no payment was started.
+            Plans are on the Captionline home page, where subscribing opens Stripe checkout. Nothing
+            has been charged and no payment was started from this editor. Rendered video output is
+            not available yet, so paid plans currently include the export entitlement rather than a
+            working renderer.
           </span>
         </p>
       ) : null}

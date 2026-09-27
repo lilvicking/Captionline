@@ -4,7 +4,7 @@ const STEPS = [
   {
     icon: Upload,
     title: "Upload",
-    body: "Drop in a video from your desktop. It stays local to your browser for now.",
+    body: "Drop in a video from your desktop. It is sent to Captionline for transcription, then deleted from the server once it has been transcribed.",
   },
   {
     icon: Captions,
