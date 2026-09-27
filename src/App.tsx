@@ -323,7 +323,7 @@ export function App() {
           <Hero onFile={handleFile} isAuthenticated={isAuthenticated} onRequestSignIn={openAccount} />
         </div>
         <HowItWorks />
-        <Pricing />
+        <Pricing onOpenAccount={openAccount} />
       </main>
 
       <Footer />

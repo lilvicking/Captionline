@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { isUnauthorized, useAuth } from "../auth/AuthContext";
 import { TERMS_PATH } from "../auth/route";
@@ -44,13 +44,23 @@ function renewalDisclosure(plan: Plan): string {
     : `Renews monthly until canceled. Includes ${minutes} processing minutes.`;
 }
 
-export function Pricing() {
+type PricingProps = {
+  /**
+   * Opens the existing account sheet. Checkout needs a signed-in account, so a
+   * signed-out visitor is sent straight to that sheet rather than being told
+   * something in a notice that may be off-screen.
+   */
+  onOpenAccount: () => void;
+};
+
+export function Pricing({ onOpenAccount }: PricingProps) {
   const { status, account, isPaidPlan, refresh, expireSession } = useAuth();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [portalBusy, setPortalBusy] = useState(false);
+  const noticeRef = useRef<HTMLParagraphElement | null>(null);
 
   const isAuthenticated = status === "authenticated";
 
@@ -77,13 +87,16 @@ export function Pricing() {
     setNotice(null);
 
     if (!isAuthenticated) {
-      setNotice("Create a free account or log in to subscribe.");
+      // Checkout requires an account. Open the sign-in sheet so the visitor gets
+      // a real next step instead of a message they may never see.
+      onOpenAccount();
       return;
     }
 
     const token = getStoredToken();
     if (!token) {
       setNotice(SESSION_EXPIRED);
+      onOpenAccount();
       return;
     }
 
@@ -102,9 +115,11 @@ export function Pricing() {
       window.location.assign(url);
     } catch (error) {
       if (isUnauthorized(error)) {
-        // The server rejected the token, so stop claiming to be signed in.
+        // The server rejected the token, so stop claiming to be signed in and
+        // take the visitor straight to signing in again.
         expireSession();
         setNotice(SESSION_EXPIRED);
+        onOpenAccount();
         return;
       }
 
@@ -146,6 +161,17 @@ export function Pricing() {
     }
   };
 
+  /**
+   * The notice sits above the plan cards, so a visitor who clicked a card may
+   * have it just off-screen. Bring it into view the moment it appears so a
+   * failed checkout can never look like nothing happened.
+   */
+  useEffect(() => {
+    if (notice !== null) {
+      noticeRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [notice]);
+
   const showPlanNotice = notice !== null;
 
   return (
@@ -163,7 +189,7 @@ export function Pricing() {
         </header>
 
         {showPlanNotice ? (
-          <p className="pricing__notice" role="status">
+          <p className="pricing__notice" role="alert" ref={noticeRef}>
             <AlertCircle size={16} aria-hidden="true" />
             {notice}
           </p>
