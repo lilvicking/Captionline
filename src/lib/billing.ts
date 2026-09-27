@@ -104,7 +104,7 @@ export async function openBillingPortal(token: string): Promise<string> {
   return payload.url;
 }
 
-/** Formats a plan price for display, e.g. "$19/month" or "$190/year". */
+/** Formats a plan price for display, e.g. "$19/month" or "$149/year". */
 export function formatPrice(plan: Plan): string {
   if (plan.price_usd === 0) {
     return "$0";

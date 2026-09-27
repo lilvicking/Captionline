@@ -228,12 +228,12 @@ charges the customer. `usage_period_months` is when the processing allowance res
 | Free | `free` | $0 | 600 s (10 min) | monthly | — | no (30 s) | no |
 | Creator | `creator_monthly` | $19 | 30,000 s (500 min) | monthly | monthly | yes | yes |
 | Pro | `pro_monthly` | $39 | 90,000 s (1,500 min) | monthly | monthly | yes | yes |
-| Creator Annual | `creator_annual` | $190 | 30,000 s (500 min) | **monthly** | **annual** | yes | yes |
+| Creator Annual | `creator_annual` | $149 | 30,000 s (500 min) | **monthly** | **annual** | yes | yes |
 
 `creator_annual` is charged once a year by Stripe but its allowance still resets every month, the
 same as Creator Monthly. Buying a year does not buy twelve months up front, and **unused minutes do
 not roll over** — a rollover sets usage back to zero and discards the remainder. It is simply the
-same 500 minutes for $38 less per year ($19 × 12 = $228 versus $190).
+same 500 minutes for $79 less per year ($19 × 12 = $228 versus $149).
 
 A usage rollover never touches subscription state, so a paid customer keeps full preview and export
 entitlement across every reset.
@@ -385,7 +385,7 @@ changes.
 
 ### Dashboard setup you must perform
 
-1. Create three recurring **Prices** ($19/mo, $39/mo, $190/yr) and copy each `price_…` ID into the
+1. Create three recurring **Prices** ($19/mo, $39/mo, $149/yr) and copy each `price_…` ID into the
    matching `STRIPE_PRICE_*` variable.
 2. Copy the **restricted** API key into `STRIPE_SECRET_KEY`.
 3. In **Developers → Webhooks**, add an endpoint at `https://<your-api-domain>/api/billing/webhook`

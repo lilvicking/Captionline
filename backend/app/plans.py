@@ -10,7 +10,7 @@ supplies plan information: it renders what the backend reports.
 `usage_period_months` is how often the processing allowance resets. These are
 deliberately independent.
 
-`creator_annual` is the case that matters: the customer is charged $190 **once a
+`creator_annual` is the case that matters: the customer is charged $149 **once a
 year** by Stripe, but their 500-minute allowance still **resets every month**, the
 same as Creator Monthly. Buying a year does not buy twelve months up front, and
 unused minutes do not roll over into the next month.
@@ -153,10 +153,11 @@ PRO_MONTHLY = PlanDefinition(
 CREATOR_ANNUAL = PlanDefinition(
     id=CREATOR_ANNUAL_PLAN_ID,
     label="Creator Annual",
-    price_usd=190,
+    price_usd=149,
     billing_period=BILLING_ANNUAL,
     monthly_equivalent_price_usd=19,  # what Creator Monthly would cost monthly
-    annual_savings_usd=19 * 12 - 190,  # 38
+    # Derived, never hardcoded: $19 x 12 = $228, minus $149 = $79.
+    annual_savings_usd=CREATOR_MONTHLY.price_usd * 12 - 149,
     usage_allowance_seconds=30_000,  # 500 minutes per month, not per year
     usage_period_months=1,
     preview_limit_seconds=None,

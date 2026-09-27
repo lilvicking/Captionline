@@ -170,7 +170,7 @@ def test_plans_endpoint_reports_purchasability(client):
     # Prices come from the backend catalogue.
     assert by_id["creator_monthly"]["price_usd"] == 19
     assert by_id["pro_monthly"]["price_usd"] == 39
-    assert by_id["creator_annual"]["price_usd"] == 190
+    assert by_id["creator_annual"]["price_usd"] == 149
 
 
 # --- Portal ---
@@ -617,7 +617,7 @@ def test_plans_annual_plan_reports_monthly_allowance_and_savings(client):
     assert annual["usage_allowance_seconds"] == 30_000
     assert annual["usage_resets_monthly"] is True
     assert annual["usage_period_months"] == 1
-    assert annual["annual_savings_usd"] == 38
+    assert annual["annual_savings_usd"] == 79
     assert annual["monthly_equivalent_price_usd"] == 19
     # Not advertised as an annual pool.
     assert annual["usage_allowance_seconds"] != 360_000

@@ -67,10 +67,10 @@ def test_pro_monthly_definition():
 def test_creator_annual_is_billed_annually_but_resets_usage_monthly():
     """Billing cadence and usage cadence are separate concerns.
 
-    The customer pays $190 once a year, yet gets the same 500-minute monthly
+    The customer pays $149 once a year, yet gets the same 500-minute monthly
     allowance as Creator Monthly, refreshing every month.
     """
-    assert CREATOR_ANNUAL.price_usd == 190
+    assert CREATOR_ANNUAL.price_usd == 149
     assert CREATOR_ANNUAL.billing_period == "annual"
     assert CREATOR_ANNUAL.is_annual_billing is True
 
@@ -86,9 +86,9 @@ def test_creator_annual_is_billed_annually_but_resets_usage_monthly():
 
 
 def test_creator_annual_savings():
-    # $19 x 12 = $228, minus $190 = $38 saved per year.
+    # $19 x 12 = $228, minus $149 = $79 saved per year.
     assert CREATOR_ANNUAL.monthly_equivalent_price_usd == CREATOR_MONTHLY.price_usd == 19
-    assert CREATOR_ANNUAL.annual_savings_usd == 38
+    assert CREATOR_ANNUAL.annual_savings_usd == 79
     assert CREATOR_ANNUAL.annual_savings_usd == CREATOR_MONTHLY.price_usd * 12 - CREATOR_ANNUAL.price_usd
 
 

@@ -77,7 +77,7 @@ the local 30-second free tier.
   same remaining allowance.
 - **Stripe subscriptions** — Checkout and the Customer Portal, with signature-verified webhooks as
   the only source of paid entitlement.
-- **Real pricing** — Free, Creator ($19), Pro ($39), and Creator Annual ($190, two months free),
+- **Real pricing** — Free, Creator ($19), Pro ($39), and Creator Annual ($149, billed annually),
   served from the backend catalogue so the frontend never hardcodes prices.
 
 **Finished-video rendering still does not exist.** Paid plans carry the export *entitlement*; the
@@ -122,12 +122,12 @@ prices are never duplicated or hardcoded in the UI.
 | Free | `free` | $0 | 600 s (10 min)/month | monthly | — | 30 s | no |
 | Creator | `creator_monthly` | $19 | 30,000 s (500 min)/month | monthly | monthly | full | yes |
 | Pro | `pro_monthly` | $39 | 90,000 s (1,500 min)/month | monthly | monthly | full | yes |
-| Creator Annual | `creator_annual` | $190 | 30,000 s (500 min)/month | **monthly** | **annual** | full | yes |
+| Creator Annual | `creator_annual` | $149 | 30,000 s (500 min)/month | **monthly** | **annual** | full | yes |
 
 **Billing cadence and usage cadence are separate.** Creator Annual is charged once a year by Stripe
 but its 500-minute allowance still resets every month, the same as Creator Monthly — paying for a
 year up front does not buy twelve months of processing at once, and **unused minutes do not roll
-over**. It is simply the same allowance for $38 less per year.
+over**. It is simply the same allowance for $79 less per year ($19 × 12 = $228 versus $149).
 
 The `PlanDefinition` model reflects this with `billing_period` (when Stripe charges) separate from
 `usage_period_months` (when the allowance refreshes). Unknown plan ids fall back to Free, so a bad
@@ -199,7 +199,7 @@ No key, product, or price is stored in this repository; every value comes from t
 
 ### Stripe dashboard setup (manual)
 
-1. Create three recurring Prices ($19/mo, $39/mo, $190/yr); copy each `price_…` ID.
+1. Create three recurring Prices ($19/mo, $39/mo, $149/yr); copy each `price_…` ID.
 2. Copy the restricted API key.
 3. Add a webhook endpoint at `https://<your-api-domain>/api/billing/webhook` subscribed to the
    events above; copy its signing secret.
