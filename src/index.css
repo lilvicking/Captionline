@@ -668,6 +668,22 @@ textarea {
   margin-top: 2px;
 }
 
+.panel__note--ok {
+  border-color: var(--gray-200);
+  background: var(--gray-050);
+  color: var(--ink);
+}
+
+.panel__note--ok svg {
+  color: var(--ink);
+}
+
+.panel__note--error {
+  border-color: var(--red);
+  background: var(--red-tint);
+  color: var(--red-dark);
+}
+
 .processing__icon--accent {
   color: var(--red);
 }

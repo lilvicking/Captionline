@@ -213,6 +213,33 @@ never display a version that differs from the one recorded against an account.
 chosen, and printing a plausible-looking one would be a fabricated legal claim. Both must be resolved
 before launch.
 
+### `POST /api/export/video`
+
+Renders the finished video. Requires a session, and the account's `can_export` entitlement —
+which is `true` for **every** plan, Free included, so Free is never blocked.
+
+Request is `multipart/form-data` with three parts: `video` (the source file), `captions` (JSON), and
+`style` (JSON). The video is streamed to disk in chunks, never base64'd into JSON.
+
+Returns the finished MP4 as a download, named `<original>-captioned.mp4`.
+
+**Export does not consume processing allowance.** Transcription is charged once, by
+`/api/transcribe`; re-rendering after a caption or style change is unlimited and free. This endpoint
+never touches usage accounting.
+
+| Status | Meaning |
+| ------ | ------- |
+| 200 | The MP4, as a download |
+| 400 | No captions to render, empty video, or unreadable JSON |
+| 401 | No valid session |
+| 403 | The account is not entitled to export |
+| 413 | Source or payload over the configured limit |
+| 415 | The upload is not a video |
+| 422 | Invalid captions/style, unreadable media, or a render failure |
+| 429 | Another render is already running |
+| 503 | FFmpeg or ffprobe is unavailable |
+| 504 | The render exceeded its time budget |
+
 ### Status codes
 
 | Code | Meaning |
@@ -1014,6 +1041,128 @@ one route.
 > **Deployment note.** Because the reset link is a real path, the Railway web
 > service needs an SPA rewrite so `/reset-password` serves `index.html` rather
 > than 404 on a direct load. The Vite dev server already does this.
+
+---
+
+## Finished-video rendering
+
+### Architecture
+
+```
+browser: original File + edited captions + CaptionStyle
+  → POST /api/export/video   (authenticated, multipart)
+    → stream upload to a private temp directory
+    → probe real duration and dimensions with ffprobe
+    → generate a temporary .ass subtitle file
+    → ffmpeg: burn the subtitles in, H.264 + AAC
+    → stream the MP4 back, then delete the temp directory
+```
+
+Code lives in `app/render/`: `models.py` (validation), `ass.py` (ASS generation), `ffmpeg.py`
+(binary discovery), `filenames.py` (download names), `service.py` (orchestration).
+
+### FFmpeg
+
+Uses the FFmpeg already required for transcription, via its **libass** filter. The Debian `ffmpeg`
+package already includes libass, so no new runtime dependency was added. The image also installs
+`fonts-dejavu-core` and `fontconfig`; without a font, libass would resolve whatever fontconfig
+happened to find, which is not reproducible.
+
+`/api/health` reports `renderer.ffmpeg_available` and `renderer.ffprobe_available` as booleans. No
+path or version is exposed.
+
+### Why ASS rather than SRT
+
+SRT carries no styling at all. ASS is the only subtitle format libass can style to match the Caption
+Designer: per-event colours, letter spacing, outline, shadow, an opaque background box, exact
+positioning, and karaoke.
+
+libass renders *either* an opaque box (`BorderStyle: 3`) *or* a text outline and shadow
+(`BorderStyle: 1`), never both, and `BorderStyle` is a style property with no per-event override. So
+when the designer has both a background and an outline, two events are emitted: a transparent-text
+`Box` event drawn first, and a `Text` event on top.
+
+### Injection safety
+
+- **No shell.** FFmpeg is invoked with a list of arguments and no `shell=True`.
+- **No user input in any argument.** The user contributes no flag, filter string, or protocol. The
+  subprocess runs with `cwd` set to the private render directory, so FFmpeg only ever sees bare
+  filenames this service created — there is nothing to escape.
+- **ASS injection is escaped.** `{...}` opens an override block and `\` starts a control code, so
+  both are neutralised in caption text. This was verified empirically: an unescaped `{b}` is consumed
+  as a tag, while `\{b\}` renders as literal ink.
+- **Filenames are allow-listed.** The saved upload's extension comes from the probed container, never
+  from the client. The download name is rebuilt from a strict allowlist, so no path separator, quote,
+  or shell metacharacter reaches a `Content-Disposition` header.
+- **Bounded.** File size, duration, payload size, caption count, and render time are all capped.
+
+### CaptionStyle mapping
+
+Pixel values arrive in the editor's 1080-tall reference frame and are scaled by
+`output_height / 1080`, so a 720p and a 4K export look the same.
+
+| Style | ASS |
+| ----- | --- |
+| `fontFamily` | mapped to an installed DejaVu family, with a fallback |
+| `fontSize`, `letterSpacing` | scaled to the frame |
+| `fontWeight >= 600` | `Bold` |
+| `textColor` | `PrimaryColour` |
+| `wordHighlight` | `SecondaryColour` (unsung) → `PrimaryColour` (sung) |
+| `backgroundColor/Opacity/Padding` | `Box` style with `BorderStyle: 3` |
+| `outlineColor/Width`, `shadowEnabled` | `OutlineColour`/`Outline`, `Shadow` |
+| `verticalPosition` | `\an5\pos(x, y)` with `y = position% × height` |
+| `textAlign` | shifts the anchor within the caption block |
+| `maxWidthPercent`, `maxCharsPerLine` | server-side wrapping before libass |
+| `uppercase` | text is upper-cased for the render only |
+| `wordSpacing` | extra gaps baked in at word boundaries |
+
+`backgroundRadius` has no ASS equivalent, so boxes are square-cornered.
+
+### Fonts and Unicode
+
+`system`/`helvetica`/`trebuchet`/`impact` map to DejaVu Sans, `georgia` to DejaVu Serif, and `mono`
+to DejaVu Sans Mono. An unknown id falls back rather than failing, so a font added later cannot break
+older exports. All are open-licensed and cover Latin, Cyrillic and Greek. Captions are written as
+UTF-8 and rendered with `Encoding=1`, so multilingual transcription is preserved.
+
+### Karaoke
+
+When `wordHighlight` is set **and** the cue's timed words still match the text being shown, `\kf`
+tags (centisecond-accurate) drive the highlight, with the unsung words in `color` and the sung word
+in `activeColor` — the same behaviour as the editor preview.
+
+**Graceful fallback:** if the user retyped the caption, the words no longer describe the text, and
+forcing tags would light up the wrong words. The renderer detects that and emits a plain
+single-colour caption instead. It never crashes and never fakes a highlight.
+
+### Output
+
+H.264 (`libx264`, veryfast, CRF 20) and AAC 192 kbps, `yuv420p`, `+faststart`. The command contains
+no `scale` or `-s`, so source dimensions and aspect ratio are preserved, and autorotation stays on so
+rotation metadata is honoured rather than applied twice. `-map 0:a:0?` means a file with no audio
+still exports.
+
+### Temporary files
+
+Each render gets a `mkdtemp` directory holding the upload, the `.ass`, and the output. It is removed
+when the render fails or times out, and on success it is removed by a background task **after** the
+response has finished streaming, so a successful download is never truncated.
+
+### Limits and concurrency
+
+Defaults, all overridable: 500 MB, 1 hour, 900 s, 1 concurrent render, 2 MB payload. Renders
+beyond the concurrency limit are refused with `429` rather than queued, because a backlog on a small
+Railway instance would time out every waiting request.
+
+### Known limitations
+
+- `backgroundRadius` is not rendered; boxes are square.
+- Line height above ~1.35 is approximated by widening the gap between wrapped lines.
+- Word spacing below 0.25 em is ignored, so the common case matches the preview exactly.
+- Progress is a stage label, not a percentage: FFmpeg progress is not streamed, and inventing a
+  number would misinform the customer.
+- Export needs the original file in the current browser session. A page refresh loses it, and the
+  editor says so rather than pretending the server kept the project.
 
 ---
 

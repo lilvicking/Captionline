@@ -8,8 +8,9 @@
  * VITE_GOVERNING_LAW (see `src/legal/config.ts`).
  *
  * Accuracy note kept in sync with the product: transcription is real, subtitle
- * (.srt) export is real, and finished MP4 rendering is not. Every plan carries
- * an export entitlement, nothing more, and this document says exactly that.
+ * (.srt) export and finished MP4 rendering are both real, and included on
+ * every plan. The Terms say exactly that, with no promise of anything that is
+ * not implemented.
  */
 
 import { CONTACT_PATH } from "../auth/route";
@@ -60,12 +61,11 @@ export function TermsPage() {
             stored and for how long.
           </p>
           <p>
-            <strong>What Captionline does not offer today:</strong> it does not yet render or
-            download a finished video file with burned-in captions. Every plan, including the free
-            plan, is{" "}
-            <em>entitled</em> to that capability when it is released, but the capability itself is
-            not available, and nothing in these Terms promises a rendered video file or a date for
-            it. Subtitle (.srt) export works today on every plan.
+            <strong>Finished-video export is available on every plan</strong>, including the free
+            plan, at no additional charge. It renders the video with your captions burned in and
+            returns an MP4 for download. Subtitle (.srt) export is also available on every plan.
+            Rendering does not consume your monthly processing allowance, so you may export again
+            whenever you change the captions or the styling.
           </p>
         </>
       ),

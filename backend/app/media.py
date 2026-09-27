@@ -31,6 +31,10 @@ class MediaInfo:
     duration_seconds: float
     has_audio: bool
     has_video: bool
+    #: Display dimensions after FFmpeg's autorotation is applied, so a rotated
+    #: phone video reports portrait rather than its stored landscape frame.
+    width: int = 0
+    height: int = 0
 
 
 def probe_media(path: str) -> MediaInfo:
@@ -85,12 +89,70 @@ def probe_media(path: str) -> MediaInfo:
     streams = payload.get("streams") or []
     has_audio = any(stream.get("codec_type") == "audio" for stream in streams)
     has_video = any(stream.get("codec_type") == "video" for stream in streams)
+    width, height = _extract_dimensions(streams)
 
     return MediaInfo(
         duration_seconds=duration,
         has_audio=has_audio,
         has_video=has_video,
+        width=width,
+        height=height,
     )
+
+
+def _extract_dimensions(streams: list[dict]) -> tuple[int, int]:
+    """Largest video stream's display size, honouring rotation metadata.
+
+    Phone video is often stored landscape with a 90-degree rotation flag. FFmpeg
+    autorotates by default, so the output swaps the axes; reporting the
+    post-rotation size keeps the caption layout matching what is produced.
+    """
+    best: tuple[int, int] = (0, 0)
+
+    for stream in streams:
+        if stream.get("codec_type") != "video":
+            continue
+
+        try:
+            width = int(stream.get("width") or 0)
+            height = int(stream.get("height") or 0)
+        except (TypeError, ValueError):
+            continue
+
+        if width <= 0 or height <= 0:
+            continue
+
+        if _rotation_degrees(stream) in (90, 270):
+            width, height = height, width
+
+        if width * height > best[0] * best[1]:
+            best = (width, height)
+
+    return best
+
+
+def _rotation_degrees(stream: dict) -> int:
+    """Rotation in degrees, from stream tags or the display matrix side data."""
+    candidates: list[object] = []
+
+    tags = stream.get("tags")
+    if isinstance(tags, dict):
+        candidates.append(tags.get("rotate"))
+
+    for side_data in stream.get("side_data_list") or []:
+        if isinstance(side_data, dict) and "rotation" in side_data:
+            candidates.append(side_data.get("rotation"))
+
+    for candidate in candidates:
+        try:
+            value = float(candidate)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+
+        if abs(value) % 180 == 90:
+            return 90 if value > 0 else 270
+
+    return 0
 
 
 def _extract_duration(payload: dict) -> float | None:

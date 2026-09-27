@@ -89,19 +89,21 @@ the local 30-second free tier.
 - **Published legal pages** — `/terms`, `/privacy`, and `/contact` at real routes, with the
   recorded Terms and Privacy versions and effective dates served from `GET /api/legal/versions`
   rather than hardcoded in the frontend.
+- **Finished-video export** — the server renders an MP4 with the edited captions burned in, on
+  **every plan including Free**. Rendering is free: it never touches the monthly processing
+  allowance, so you can export again after any change. See
+  [Finished-video export](#finished-video-export).
 - **Security posture** — security response headers on every response, request rate limiting on the
   sensitive and metered endpoints, and a production configuration gate. See
   [Security posture](#security-posture).
 
-**Finished-video rendering still does not exist.** Paid plans carry the export *entitlement*; the
-button stays disabled and says so plainly. Nothing is faked. Transcription **is** gated by login
-now, so an upload requires an account and a signed-out visitor is asked to create one.
+Transcription **is** gated by login, so an upload requires an account and a signed-out visitor is
+asked to create one.
 
 ## What is NOT implemented yet
 
 Nothing below exists yet, by design:
 
-- No finished-video rendering (paid plans carry the entitlement only)
 - No email verification of new addresses
 - No social/OAuth login
 - No Google Drive or other cloud storage integration
@@ -111,6 +113,30 @@ Nothing below exists yet, by design:
 - No background job queue, so very long videos on CPU may exceed a proxy timeout
 - No published refund policy, and no published governing law or support address. The Terms say so
   plainly rather than naming one, so they must be settled before paid subscriptions are offered
+
+## Finished-video export
+
+`POST /api/export/video` renders the video server-side with the captions burned in, using the FFmpeg
+already required for transcription and its libass filter. It is included on **every plan, Free
+included**, and is **free**: it never touches the monthly processing allowance, so you can change the
+captions or the style and export again as often as you like.
+
+```
+browser (original File + edited captions + CaptionStyle)
+  → POST /api/export/video  (authenticated, multipart)
+    → upload streamed to a private temp directory
+    → ffprobe measures real duration and dimensions
+    → a temporary .ass subtitle file is generated from the caption data
+    → ffmpeg burns the subtitles in, H.264 + AAC
+    → the MP4 streams back, then the directory is deleted
+```
+
+`[backend/README.md](backend/README.md#finished-video-rendering)` documents the styling mapping, the
+font strategy, the karaoke fallback, and the injection-safety reasoning.
+
+**One limitation worth stating plainly:** export needs the original video to still be in the current
+browser tab. Captionline does not store projects, so reloading the page loses the source and the
+editor says so rather than pretending otherwise. Re-upload to export again.
 
 ## Security posture
 
@@ -437,14 +463,14 @@ more restrictive answer whenever it is unsure.
                 └── CaptionControls.tsx  # Range, colour, toggle, select, segmented
 ```
 
-The `CaptionCue` model (`{ id, start, end, text }`) is the contract a future transcription service
-will return, so the editor wiring does not need to change when real transcription is connected.
+The `CaptionCue` model (`{ id, start, end, text, words? }`) is the contract the transcription service
+returns, and the renderer burns in exactly what the editor holds — user corrections included.
 
-### CaptionStyle and the future renderer
+### CaptionStyle and the renderer
 
 All caption styling lives in one typed `CaptionStyle` object (`src/types.ts`) rather than being
-scattered across components. The video preview consumes that object directly, and its values are
-designed to be handed to a rendering backend unchanged:
+scattered across components. The video preview consumes that object directly, and the server-side
+renderer consumes **the same object**, so the exported MP4 matches what the preview shows:
 
 - Every pixel value (`fontSize`, `backgroundPadding`, `backgroundRadius`, `outlineWidth`) is
   expressed against a **1080px-tall reference frame** (`CAPTION_STYLE_REFERENCE_HEIGHT`). The preview
@@ -605,7 +631,15 @@ default and whether it is a secret. The most important one is not obvious from a
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `MAX_UPLOAD_MB` | Upload size limit |
 | `FFPROBE_PATH` | `ffprobe` location, used to measure real duration |
+| `EXPORT_MAX_FILE_MB` | Largest source video accepted for a render (default 500) |
+| `EXPORT_MAX_DURATION_SECONDS` | Longest renderable video (default 3600) |
+| `EXPORT_TIMEOUT_SECONDS` | Wall-clock budget for one render (default 900) |
+| `EXPORT_CONCURRENCY` | Renders allowed at once (default 1) |
+| `EXPORT_MAX_PAYLOAD_KB` | Largest caption/style JSON payload (default 2048) |
 | `PORT` | Supplied by Railway |
+
+All five `EXPORT_*` values have working defaults, so export runs with no new Railway configuration.
+`backend/.env.example` documents every variable the service reads.
 
 These must **not** be prefixed with `VITE_`. The four secrets in the system are **`DATABASE_URL`,
 `EMAIL_API_KEY`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET`**, and nothing else: the WhisperX

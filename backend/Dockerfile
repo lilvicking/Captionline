@@ -18,11 +18,24 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # ffmpeg is required by WhisperX/faster-whisper to decode uploaded media, and
-# ffprobe measures real media duration before any processing.
+# ffprobe measures real media duration before any processing. The Debian package
+# already includes libass, which burns captions into the exported video.
+#
+# fonts-dejavu-core + fontconfig give libass an open-licensed font that covers
+# Latin, Cyrillic and Greek, so caption rendering works the same in the image as
+# it does during local development. Without a font installed, libass would fall
+# back to whatever fontconfig happens to find, which is not reproducible.
+#
 # libgomp1 is needed by torch CPU kernels. libpq5 is the PostgreSQL client
 # library used by psycopg.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg libgomp1 libpq5 \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        fontconfig \
+        fonts-dejavu-core \
+        libgomp1 \
+        libpq5 \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

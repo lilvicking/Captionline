@@ -63,6 +63,21 @@ class StripeHealth(BaseModel):
     webhook_configured: bool
 
 
+class RendererHealth(BaseModel):
+    """Finished-video export availability.
+
+    Booleans only. Binary locations and versions are never returned, so probing
+    the host does not become an information leak.
+    """
+
+    ffmpeg_available: bool
+    ffprobe_available: bool
+
+    @property
+    def available(self) -> bool:
+        return self.ffmpeg_available and self.ffprobe_available
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -75,3 +90,4 @@ class HealthResponse(BaseModel):
     cuda_available: bool
     database: DatabaseHealth | None = None
     stripe: StripeHealth | None = None
+    renderer: RendererHealth | None = None

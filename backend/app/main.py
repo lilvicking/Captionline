@@ -33,9 +33,16 @@ from .db.session import get_db, is_configured
 from .headers import SecurityHeadersMiddleware
 from .media import MediaProbeError, billable_seconds, probe_media
 from .ratelimit import enforce, reset_rate_limits
-from .routers import account, auth, billing, password_reset
+from .routers import account, auth, billing, export, password_reset
 from .routers.account import legal_router
-from .schemas import DatabaseHealth, HealthResponse, StripeHealth, TranscriptionResponse
+from .render.ffmpeg import ffmpeg_available, ffprobe_available
+from .schemas import (
+    DatabaseHealth,
+    HealthResponse,
+    RendererHealth,
+    StripeHealth,
+    TranscriptionResponse,
+)
 from .security.deps import get_current_user
 from .security.sessions import purge_expired_sessions
 from .stripe_client import refresh_price_mapping
@@ -278,6 +285,7 @@ app.include_router(account.router)
 # app/routers/account.py next to the rest of the account surface.
 app.include_router(legal_router)
 app.include_router(billing.router)
+app.include_router(export.router)
 
 
 def _database_health() -> DatabaseHealth:
@@ -370,6 +378,10 @@ async def health() -> HealthResponse:
             configured=settings.stripe_is_configured,
             billing_configured=settings.stripe_billing_is_configured,
             webhook_configured=bool(settings.stripe_webhook_secret),
+        ),
+        renderer=RendererHealth(
+            ffmpeg_available=ffmpeg_available(),
+            ffprobe_available=ffprobe_available(),
         ),
     )
 

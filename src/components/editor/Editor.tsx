@@ -13,12 +13,19 @@ import { VideoStage } from "./VideoStage";
 type EditorProps = {
   videoUrl: string;
   videoName: string;
+  /**
+   * The original upload, held for this editing session. Rendering the finished
+   * video needs the untouched source, which the server only saw transiently.
+   */
+  sourceFile: File | null;
   cues: CaptionCue[];
   setCues: Dispatch<SetStateAction<CaptionCue[]>>;
   transcription: TranscriptionMeta;
   onReset: () => void;
   /** Opens the pricing plans, which live outside the editor stage. */
   onShowPlans: () => void;
+  /** Opens the existing account sheet, for actions that need a session. */
+  onRequestSignIn: () => void;
 };
 
 const DEFAULT_CUE_LENGTH_SECONDS = 2;
@@ -26,11 +33,13 @@ const DEFAULT_CUE_LENGTH_SECONDS = 2;
 export function Editor({
   videoUrl,
   videoName,
+  sourceFile,
   cues,
   setCues,
   transcription,
   onReset,
   onShowPlans,
+  onRequestSignIn,
 }: EditorProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -177,7 +186,14 @@ export function Editor({
             onReset={handleStyleReset}
           />
 
-          <ExportPanel cues={cues} videoName={videoName} onShowPlans={onShowPlans} />
+          <ExportPanel
+            cues={cues}
+            videoName={videoName}
+            style={captionStyle}
+            sourceFile={sourceFile}
+            onShowPlans={onShowPlans}
+            onRequestSignIn={onRequestSignIn}
+          />
         </aside>
       </div>
 

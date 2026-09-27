@@ -182,9 +182,9 @@ export function Pricing({ onOpenAccount }: PricingProps) {
           <h2 className="section__title">Plans that scale with your channel</h2>
           <p className="section__lede">
             Every plan includes full caption editing, the complete caption designer, the full
-            finished preview, and .srt subtitle export. Plans differ in how much video you can
-            process each month. Finished-video export is included everywhere too — the renderer that
-            produces the video file is still on its way, so nothing today produces an MP4.
+            finished preview, finished-video export, and .srt subtitle export. Plans differ only in
+            how much video you can process each month. Rendering does not use any of those minutes,
+            so you can export again as often as you like.
           </p>
         </header>
 
@@ -259,7 +259,7 @@ export function Pricing({ onOpenAccount }: PricingProps) {
                     </li>
                     <li>
                       <Check size={14} aria-hidden="true" />
-                      Finished-video export included — renderer coming soon
+                      Finished-video export included on every plan
                     </li>
                     <li>
                       <Check size={14} aria-hidden="true" />

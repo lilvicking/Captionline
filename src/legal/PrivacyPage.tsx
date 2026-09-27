@@ -139,8 +139,17 @@ export function PrivacyPage() {
             <strong>Captions and projects.</strong> Caption text you edit, styling, and any project
             you assemble are held in your browser's memory as you work. Captionline does not store
             your finished caption track, your project, or your exported file on its servers. If you
-            close or reload the page, unsaved edits are lost, so download the .srt file you want to
-            keep.
+            close or reload the page, unsaved edits are lost, so download the .srt or .mp4 file you
+            want to keep.
+          </p>
+          <p>
+            <strong>When you export a finished video.</strong> Export works the same way: the
+            video, together with the captions and styling currently in your editor, is sent to our
+            server, written to a directory created for that one export, and used to render the MP4
+            before being deleted. The rendered file is streamed straight back to you and then
+            removed, once the download has finished. The same abnormal-termination caveat described
+            above applies. Exporting does not use any of your monthly processing allowance, and we
+            do not retain the source video, the rendered result, or a project you can return to.
           </p>
         </>
       ),

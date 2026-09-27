@@ -388,6 +388,28 @@ class Settings:
         """
         return self.app_env == PRODUCTION_ENV
 
+    # --- Finished-video export (Phase 4) --------------------------------
+    # Rendering is CPU bound, so the defaults are conservative for a small
+    # Railway service. Nothing here is required: export works out of the box.
+    export_max_file_mb: int = field(
+        default_factory=lambda: _env_int("EXPORT_MAX_FILE_MB", 500)
+    )
+    export_max_duration_seconds: int = field(
+        default_factory=lambda: _env_int("EXPORT_MAX_DURATION_SECONDS", 3600)
+    )
+    export_timeout_seconds: int = field(
+        default_factory=lambda: _env_int("EXPORT_TIMEOUT_SECONDS", 900)
+    )
+    # Renders allowed to run at once. One keeps a small instance responsive; a
+    # larger instance can raise it.
+    export_concurrency: int = field(
+        default_factory=lambda: _env_int("EXPORT_CONCURRENCY", 1)
+    )
+    # Largest accepted captions/style JSON payload, in bytes.
+    export_max_payload_bytes: int = field(
+        default_factory=lambda: _env_int("EXPORT_MAX_PAYLOAD_KB", 2048) * 1024
+    )
+
     @property
     def cors_allows_any(self) -> bool:
         """Whether CORS_ORIGINS contains an explicit wildcard.

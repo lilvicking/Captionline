@@ -44,6 +44,11 @@ export type TranscriptionMeta = {
 export function App() {
   const [stage, setStage] = useState<Stage>("landing");
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  // The original upload, kept for the length of the editing session so the
+  // finished video can be rendered later. The server only ever saw it
+  // transiently, so this is what makes export possible without permanent video
+  // storage. A page refresh loses it, which the editor states honestly.
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [videoName, setVideoName] = useState("");
   const [cues, setCues] = useState<CaptionCue[]>(createSampleCues);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -172,6 +177,7 @@ export function App() {
 
       setVideoUrl(url);
       setVideoName(file.name);
+      setSourceFile(file);
       setStage("processing");
       setJob({ phase: "uploading", message: "Preparing your workspace" });
       setMeta({ source: "sample", wordAligned: false });
@@ -184,6 +190,7 @@ export function App() {
     releaseObjectUrl();
     setVideoUrl(null);
     setVideoName("");
+    setSourceFile(null);
     setPendingFile(null);
     setJob(null);
     setCues(createSampleCues());
@@ -301,15 +308,17 @@ export function App() {
   if (stage === "editor" && videoUrl) {
     return (
       <div className="app">
-        <Editor
-          videoUrl={videoUrl}
-          videoName={videoName}
-          cues={cues}
-          setCues={setCues}
-          transcription={meta}
-          onReset={handleReset}
-          onShowPlans={showPlans}
-        />
+      <Editor
+        videoUrl={videoUrl}
+        videoName={videoName}
+        sourceFile={sourceFile}
+        cues={cues}
+        setCues={setCues}
+        transcription={meta}
+        onReset={handleReset}
+        onShowPlans={showPlans}
+        onRequestSignIn={openAccount}
+      />
       </div>
     );
   }
