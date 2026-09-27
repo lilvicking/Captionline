@@ -704,7 +704,7 @@ export function AccountPanel({ onClose }: AccountPanelProps) {
           <p className="account__hint">
             {mode === "in"
               ? "New to Captionline? Switch to Sign up."
-              : "Free accounts get 10 processing minutes a month and a 30-second finished preview."}
+              : "Free accounts get 10 processing minutes a month, with every feature included."}
           </p>
         </form>
       )}

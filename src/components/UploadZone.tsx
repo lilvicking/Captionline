@@ -82,7 +82,7 @@ export function UploadZone({
         <p className="dropzone__hint">
           {isAuthenticated
             ? "Your video is sent to Captionline for transcription and deleted from our server once it has been transcribed. It is never added to a media library and never used to train a model."
-            : "Free accounts include 10 processing minutes a month and a 30-second finished preview."}
+              : "Free accounts include 10 processing minutes a month, with every feature included."}
         </p>
 
         <button

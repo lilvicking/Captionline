@@ -514,9 +514,10 @@ def test_snapshot_reports_free_plan(db_session):
     assert snapshot.processing_used_seconds == 192
     assert snapshot.processing_remaining_seconds == 408
     assert snapshot.processing_used_minutes == 3.2
-    assert snapshot.preview_limit_seconds == 30
-    assert snapshot.has_full_preview is False
-    assert snapshot.can_export is False
+    # Free previews the finished video in full, like every other plan.
+    assert snapshot.preview_limit_seconds is None
+    assert snapshot.has_full_preview is True
+    assert snapshot.can_export is True
     assert snapshot.is_paid_plan is False
     assert snapshot.usage_resets_monthly is True
     assert snapshot.billed_annually is False
@@ -558,11 +559,17 @@ def test_apply_plan_seeds_entitlements(db_session):
 
 
 def test_apply_plan_falls_back_to_free_for_unknown(db_session):
+    """An unknown plan id lands on free, and never on paid capacity."""
     user = make_user(db_session, plan_id="enterprise_unknown")
     apply_plan_to_user(user, "enterprise_unknown")
 
     assert user.plan == "free"
-    assert user.can_export is False
+    # Capabilities match free, which every plan has.
+    assert user.can_export is True
+    assert user.has_full_preview is True
+    assert user.preview_limit_seconds is None
+    # Capacity is the free allowance, not an unknown plan's.
+    assert user.monthly_processing_allowance_seconds == 600
 
 
 def test_seconds_and_minutes_formatting():

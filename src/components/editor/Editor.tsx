@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { ArrowLeft, Info } from "lucide-react";
 import { DEFAULT_CAPTION_STYLE } from "../../types";
 import type { CaptionCue, CaptionStyle } from "../../types";
 import type { TranscriptionMeta } from "../../App";
-import { canPreviewAt } from "../../entitlement";
-import { useAuth } from "../../auth/AuthContext";
 import { CaptionDesigner } from "./CaptionDesigner";
 import { CaptionTrack } from "./CaptionTrack";
 import { ExportPanel } from "./ExportPanel";
@@ -39,56 +37,27 @@ export function Editor({
   const [duration, setDuration] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
-  const [isPreviewLocked, setIsPreviewLocked] = useState(false);
-
-  // Server-authoritative when signed in; the free tier otherwise. Never widens
-  // preview access on its own.
-  const { entitlement } = useAuth();
 
   const playingCue = useMemo(
     () => cues.find((cue) => currentTime >= cue.start && currentTime < cue.end) ?? null,
     [cues, currentTime],
   );
 
-  const lockPreview = useCallback(() => {
-    setIsPreviewLocked(true);
-  }, []);
-
-  const unlockPreview = useCallback(() => {
-    setIsPreviewLocked(false);
-  }, []);
-
-  // A new upload starts with a fresh, unlocked preview window.
-  useEffect(() => {
-    setIsPreviewLocked(false);
-  }, [videoUrl]);
-
   /**
-   * Seeking is gated by the entitlement, while the caption data is not. Choosing
-   * a cue past the boundary still selects and edits that cue; it just does not
-   * move the protected video playhead there.
+   * Moves the playhead. Every plan is entitled to the full finished preview, so
+   * there is no boundary to refuse here: the metered limit is on processing, not
+   * on watching what the customer has already paid the processing time for.
    */
-  const seek = useCallback(
-    (time: number) => {
-      if (!canPreviewAt(time, entitlement)) {
-        setIsPreviewLocked(true);
-        return;
-      }
+  const seek = useCallback((time: number) => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
 
-      // Back inside the allowed window, so the lock no longer applies.
-      setIsPreviewLocked(false);
-
-      const video = videoRef.current;
-      if (!video) {
-        return;
-      }
-
-      const target = Math.max(0, time);
-      video.currentTime = target;
-      setCurrentTime(target);
-    },
-    [entitlement],
-  );
+    const target = Math.max(0, time);
+    video.currentTime = target;
+    setCurrentTime(target);
+  }, []);
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
@@ -185,11 +154,6 @@ export function Editor({
             activeCue={playingCue}
             currentTime={currentTime}
             style={captionStyle}
-            entitlement={entitlement}
-            isPreviewLocked={isPreviewLocked}
-            onPreviewLock={lockPreview}
-            onPreviewUnlock={unlockPreview}
-            onShowPlans={onShowPlans}
             onVerticalPositionChange={handleVerticalPositionChange}
             onTimeUpdate={handleTimeUpdate}
             onLoadedMetadata={handleLoadedMetadata}
@@ -200,8 +164,6 @@ export function Editor({
             currentTime={currentTime}
             duration={duration}
             selectedId={selectedId}
-            previewLimitSeconds={entitlement.previewLimitSeconds}
-            hasFullPreview={entitlement.hasFullPreview}
             onSeek={seek}
             onSelect={handleSelect}
           />

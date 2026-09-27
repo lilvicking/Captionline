@@ -8,8 +8,8 @@
  * VITE_GOVERNING_LAW (see `src/legal/config.ts`).
  *
  * Accuracy note kept in sync with the product: transcription is real, subtitle
- * (.srt) export is real, and finished MP4 rendering is not. Paid plans carry an
- * export entitlement, nothing more, and this document says exactly that.
+ * (.srt) export is real, and finished MP4 rendering is not. Every plan carries
+ * an export entitlement, nothing more, and this document says exactly that.
  */
 
 import { CONTACT_PATH } from "../auth/route";
@@ -61,10 +61,11 @@ export function TermsPage() {
           </p>
           <p>
             <strong>What Captionline does not offer today:</strong> it does not yet render or
-            download a finished video file with burned-in captions. Paid plans include an{" "}
-            <em>entitlement</em> to that capability when it is released, but the capability itself is
+            download a finished video file with burned-in captions. Every plan, including the free
+            plan, is{" "}
+            <em>entitled</em> to that capability when it is released, but the capability itself is
             not available, and nothing in these Terms promises a rendered video file or a date for
-            it. Subtitle (.srt) export works on every plan, including the free plan.
+            it. Subtitle (.srt) export works today on every plan.
           </p>
         </>
       ),
@@ -205,8 +206,8 @@ export function TermsPage() {
         <>
           <p>
             The free plan needs no payment details and includes a monthly processing allowance and
-            a preview of the finished captioned video limited to the first 30 seconds. Both figures
-            are the ones shown on the Pricing page and in your account, and both can change.
+            the full finished preview. Both figures are the ones shown on the Pricing page and in
+            your account, and both can change.
           </p>
           <p>
             Usage limits apply per account and are measured in processing time, that is the duration

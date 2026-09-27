@@ -333,7 +333,12 @@ def test_annual_price_upgrades_to_monthly_allowance(client, db_session):
 
 
 def test_unknown_price_does_not_grant_paid_access(client, db_session):
-    """A price we do not map must never upgrade the account."""
+    """A price we do not map must never upgrade the account.
+
+    Every plan now has the same capabilities, so "upgraded" has to be proven
+    with the monthly processing allowance, which is the only thing that
+    distinguishes a paid plan.
+    """
     token = register(client).json()["access_token"]
     attach_stripe_identity(db_session, "buyer@example.com")
 
@@ -343,8 +348,7 @@ def test_unknown_price_does_not_grant_paid_access(client, db_session):
     entitlement = client.get("/api/account/entitlement", headers=auth_header(token)).json()
 
     assert entitlement["plan"] == "free"
-    assert entitlement["has_full_preview"] is False
-    assert entitlement["can_export"] is False
+    assert entitlement["is_paid_plan"] is False
     assert entitlement["monthly_processing_allowance_seconds"] == 600
 
 
@@ -366,8 +370,9 @@ def test_past_due_subscription_removes_paid_entitlement(client, db_session):
 
     entitlement = client.get("/api/account/entitlement", headers=auth_header(token)).json()
     assert entitlement["plan"] == "free"
-    assert entitlement["has_full_preview"] is False
-    assert entitlement["can_export"] is False
+    assert entitlement["is_paid_plan"] is False
+    # A lapsed subscription gives back the paid capacity, not the capability.
+    assert entitlement["monthly_processing_allowance_seconds"] == 600
 
 
 def test_subscription_deleted_returns_to_free_but_keeps_the_account(
@@ -401,9 +406,10 @@ def test_subscription_deleted_returns_to_free_but_keeps_the_account(
 
     entitlement = client.get("/api/account/entitlement", headers=auth_header(token)).json()
 
-    # Entitlement reverts...
+    # Entitlement reverts to free capacity...
     assert entitlement["plan"] == "free"
-    assert entitlement["has_full_preview"] is False
+    assert entitlement["is_paid_plan"] is False
+    assert entitlement["monthly_processing_allowance_seconds"] == 600
     # ...but the account itself, and access to it, survive.
     assert client.get("/api/auth/me", headers=auth_header(token)).status_code == 200
     assert client.get("/api/auth/me", headers=auth_header(token)).json()["email"] == "buyer@example.com"
@@ -435,8 +441,11 @@ def test_checkout_completed_alone_does_not_grant_access(client, db_session):
 
     entitlement = client.get("/api/account/entitlement", headers=auth_header(token)).json()
 
+    # A browser round trip is not a payment. The account stays on free capacity
+    # until a verified subscription event arrives.
     assert entitlement["plan"] == "free"
-    assert entitlement["has_full_preview"] is False
+    assert entitlement["is_paid_plan"] is False
+    assert entitlement["monthly_processing_allowance_seconds"] == 600
 
 
 def test_webhook_is_idempotent_for_duplicate_delivery(client, db_session):
@@ -590,9 +599,13 @@ def test_free_entitlement_wire_shape(client):
     token = register(client).json()["access_token"]
     body = client.get("/api/account/entitlement", headers=auth_header(token)).json()
 
-    assert body["has_full_preview"] is False
-    assert body["preview_limit_seconds"] == 30
-    assert body["can_export"] is False
+    # Free is a full-capability plan: full preview and the export entitlement.
+    assert body["has_full_preview"] is True
+    assert body["preview_limit_seconds"] is None
+    assert body["can_export"] is True
+    # Only capacity differs from a paid plan.
+    assert body["monthly_processing_allowance_seconds"] == 600
+    assert body["is_paid_plan"] is False
 
 
 def test_plans_payload_uses_snake_case(client):

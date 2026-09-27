@@ -18,8 +18,6 @@ import {
   storeToken,
 } from "../lib/auth";
 import type { AccountEntitlement, AuthUser } from "../lib/auth";
-import { entitlementFromServer, resolvePreviewEntitlement } from "../entitlement";
-import type { PreviewEntitlement } from "../entitlement";
 
 type AuthStatus = "loading" | "authenticated" | "anonymous";
 
@@ -40,12 +38,6 @@ type AuthContextValue = {
   account: AccountEntitlement | null;
   /** Whether the signed-in account is on a paid plan. */
   isPaidPlan: boolean;
-  /**
-   * Entitlement the editor enforces. Always starts at (and falls back to) the
-   * free 30-second tier, so an anonymous visitor or a failed fetch can never
-   * gain a wider preview.
-   */
-  entitlement: PreviewEntitlement;
   /** Re-reads plan and usage from the server. Called after transcription. */
   refresh: () => Promise<void>;
   /**
@@ -61,21 +53,17 @@ type AuthContextValue = {
   signOut: () => Promise<void>;
 };
 
-const FREE_TIER = resolvePreviewEntitlement();
-
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [account, setAccount] = useState<AccountEntitlement | null>(null);
-  const [entitlement, setEntitlement] = useState<PreviewEntitlement>(FREE_TIER);
 
   const clearSession = useCallback(() => {
     storeToken(null);
     setUser(null);
     setAccount(null);
-    setEntitlement(FREE_TIER);
     setStatus("anonymous");
   }, []);
 
@@ -84,9 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    *
    * Unlike `refresh`, every failure signs the viewer out here: there is no
    * verified identity to preserve on a cold start, so a token that cannot be
-   * confirmed is discarded rather than carried forward. A rejected token (401)
-   * certainly has to go; the free tier stays in place either way rather than
-   * assuming paid access.
+   * confirmed is discarded rather than carried forward.
    */
   useEffect(() => {
     const token = getStoredToken();
@@ -111,7 +97,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         setUser(restoredUser);
         setAccount(restoredEntitlement);
-        setEntitlement(entitlementFromServer(restoredEntitlement));
         setStatus("authenticated");
       } catch {
         if (!cancelled) {
@@ -133,21 +118,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     storeToken(result.access_token);
 
-    // Fetch entitlement straight after sign-in so the preview tier reflects the
-    // account. A failure here leaves the free tier active.
-    let nextEntitlement = FREE_TIER;
+    // Fetch entitlement straight after sign-in so plan and usage reflect the
+    // account. A failure here leaves usage unavailable rather than guessed.
     let nextAccount: AccountEntitlement | null = null;
 
     try {
       nextAccount = await fetchEntitlement(result.access_token);
-      nextEntitlement = entitlementFromServer(nextAccount);
     } catch {
-      // Fail closed: keep the free tier.
+      // Usage is simply unavailable until the next refresh.
     }
 
     setUser(result.user);
     setAccount(nextAccount);
-    setEntitlement(nextEntitlement);
     setStatus("authenticated");
   }, []);
 
@@ -166,8 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * meter reflects what was just spent, and after a Stripe redirect returns.
    *
    * A 401 means the token is no longer valid, so the session is cleared and the
-   * viewer is signed out. Every other failure keeps the last known state, and
-   * if there is none the free tier stays in place. It never widens access.
+   * viewer is signed out. Every other failure keeps the last known state.
    */
   const refresh = useCallback(async () => {
     const token = getStoredToken();
@@ -177,9 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const next = await fetchEntitlement(token);
-      setAccount(next);
-      setEntitlement(entitlementFromServer(next));
+      setAccount(await fetchEntitlement(token));
     } catch (error) {
       if (isUnauthorized(error)) {
         clearSession();
@@ -214,24 +193,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       account,
       isPaidPlan: account?.is_paid_plan === true,
-      entitlement,
       refresh,
       expireSession,
       signIn,
       signUp,
       signOut,
     }),
-    [
-      status,
-      user,
-      account,
-      entitlement,
-      refresh,
-      expireSession,
-      signIn,
-      signUp,
-      signOut,
-    ],
+    [status, user, account, refresh, expireSession, signIn, signUp, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -35,11 +35,44 @@ from app.plans import SUBSCRIPTION_ACTIVE, SUBSCRIPTION_CANCELED, SUBSCRIPTION_P
 def test_free_plan_definition():
     assert FREE_PLAN.price_usd == 0
     assert FREE_PLAN.usage_allowance_seconds == 600
-    assert FREE_PLAN.preview_limit_seconds == 30
-    assert FREE_PLAN.has_full_preview is False
-    assert FREE_PLAN.can_export is False
+    # Free is a full-capability plan, not a degraded tier. The only difference
+    # from a paid plan is monthly processing capacity.
+    assert FREE_PLAN.preview_limit_seconds is None
+    assert FREE_PLAN.has_full_preview is True
+    assert FREE_PLAN.can_export is True
+    # "paid" is about taking payment, not about capability.
     assert FREE_PLAN.paid is False
     assert FREE_PLAN.usage_period_months == 1
+
+
+def test_every_plan_has_identical_capabilities():
+    """Only the processing allowance distinguishes the plans.
+
+    Paid plans must not be bought for capability the free plan lacks.
+    """
+    for plan in PLANS.values():
+        assert plan.preview_limit_seconds is None, f"{plan.id} should preview in full"
+        assert plan.has_full_preview is True, f"{plan.id} should have full preview"
+        assert plan.can_export is True, f"{plan.id} should carry export entitlement"
+        assert plan.usage_period_months == 1, f"{plan.id} should reset monthly"
+
+    allowances = {plan.id: plan.usage_allowance_seconds for plan in PLANS.values()}
+    assert allowances == {
+        "free": 600,
+        "creator_monthly": 30_000,
+        "pro_monthly": 90_000,
+        "creator_annual": 30_000,
+    }
+    # Capacity is the only thing that rises with price.
+    assert allowances["free"] < allowances["creator_monthly"] < allowances["pro_monthly"]
+
+
+def test_no_plan_carries_a_preview_limit():
+    """The finished preview is unrestricted on every plan."""
+    for plan in PLANS.values():
+        assert plan.preview_limit_seconds is None, (
+            f"{plan.id} still has a preview limit of {plan.preview_limit_seconds}"
+        )
 
 
 # --- Paid plans ---
@@ -131,12 +164,21 @@ def test_catalogue_contains_exactly_four_plans():
 
 @pytest.mark.parametrize("unknown", [None, "", "enterprise", "creator", "FREE", "free_v2"])
 def test_unknown_plan_fails_closed_to_free(unknown):
+    """An unrecognised plan must never grant more than the free plan gives.
+
+    The free plan is now fully capable, so "fails closed" means it lands on
+    free's allowance (600s) rather than inheriting an unrecognised plan's
+    allowance. It still never claims to be paid.
+    """
     resolved = get_plan(unknown)
 
     assert resolved.id == "free"
     assert resolved.paid is False
-    assert resolved.can_export is False
-    assert resolved.has_full_preview is False
+    # Capabilities match free, which every plan has.
+    assert resolved.can_export is True
+    assert resolved.has_full_preview is True
+    assert resolved.preview_limit_seconds is None
+    # Allowance falls back to free's 10 minutes, not to anything unknown.
     assert resolved.usage_allowance_seconds == 600
 
 

@@ -6,9 +6,6 @@ import { applyUppercase, wrapCaption, wrapWords } from "../../lib/text";
 import { CAPTION_FONT_MAP } from "../../data/captionFonts";
 import { CAPTION_STYLE_REFERENCE_HEIGHT } from "../../types";
 import type { CaptionCue, CaptionStyle, CaptionWord } from "../../types";
-import { canPreviewAt, hasReachedPreviewLimit } from "../../entitlement";
-import type { PreviewEntitlement } from "../../entitlement";
-import { PreviewLock } from "./PreviewLock";
 
 /** Used before the stage has been measured, so the first paint is already sane. */
 const FALLBACK_SCALE = 1 / 3;
@@ -22,11 +19,6 @@ type VideoStageProps = {
   activeCue: CaptionCue | null;
   currentTime: number;
   style: CaptionStyle;
-  entitlement: PreviewEntitlement;
-  isPreviewLocked: boolean;
-  onPreviewLock: () => void;
-  onPreviewUnlock: () => void;
-  onShowPlans: () => void;
   onVerticalPositionChange: (value: number) => void;
   onTimeUpdate: () => void;
   onLoadedMetadata: () => void;
@@ -53,11 +45,6 @@ export function VideoStage({
   activeCue,
   currentTime,
   style,
-  entitlement,
-  isPreviewLocked,
-  onPreviewLock,
-  onPreviewUnlock,
-  onShowPlans,
   onVerticalPositionChange,
   onTimeUpdate,
   onLoadedMetadata,
@@ -81,72 +68,6 @@ export function VideoStage({
 
     return () => observer.disconnect();
   }, []);
-
-  /**
-   * Free-tier preview enforcement.
-   *
-   * Playback is stopped at the boundary, and any seek past it is pulled back to
-   * the boundary so the protected frames are never displayed. This covers the
-   * native browser controls as well as Captionline's own timeline, because both
-   * drive the same `seeking` event on the media element.
-   *
-   * UX-level protection only; see `src/entitlement.ts` for why this is not a
-   * security boundary.
-   */
-  useEffect(() => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return;
-    }
-
-    const stopAtBoundary = () => {
-      if (!hasReachedPreviewLimit(video.currentTime, entitlement)) {
-        return;
-      }
-
-      if (!video.paused) {
-        video.pause();
-      }
-      onPreviewLock();
-    };
-
-    const guardSeek = () => {
-      if (canPreviewAt(video.currentTime, entitlement)) {
-        // Moved back inside the allowed window.
-        onPreviewUnlock();
-        return;
-      }
-
-      // Pull the playhead back to the boundary. This re-enters `seeking` once
-      // with currentTime === limit, where canPreviewAt is true, so it settles.
-      video.currentTime = entitlement.previewLimitSeconds ?? video.currentTime;
-      video.pause();
-      onPreviewLock();
-    };
-
-    video.addEventListener("timeupdate", stopAtBoundary);
-    video.addEventListener("play", stopAtBoundary);
-    video.addEventListener("seeking", guardSeek);
-
-    return () => {
-      video.removeEventListener("timeupdate", stopAtBoundary);
-      video.removeEventListener("play", stopAtBoundary);
-      video.removeEventListener("seeking", guardSeek);
-    };
-  }, [videoRef, entitlement, onPreviewLock, onPreviewUnlock]);
-
-  /** Restarts the allowed preview window and lifts the lock. */
-  const replayPreview = useCallback(() => {
-    const video = videoRef.current;
-
-    if (video) {
-      video.pause();
-      video.currentTime = 0;
-    }
-    onPreviewUnlock();
-    onTimeUpdate();
-  }, [videoRef, onPreviewUnlock, onTimeUpdate]);
 
   /**
    * Scale factor from the 1080px reference frame to the rendered stage, so
@@ -270,14 +191,7 @@ export function VideoStage({
         onLoadedMetadata={onLoadedMetadata}
       />
 
-      {isPreviewLocked ? (
-        <>
-          <div className="stage__shield" aria-hidden="true" />
-          <PreviewLock onReplayPreview={replayPreview} onShowPlans={onShowPlans} />
-        </>
-      ) : null}
-
-      {activeText && !isPreviewLocked ? (
+      {activeText ? (
         <div className="overlay" style={{ top: `${style.verticalPosition}%` }}>
           <div
             className={`overlay__text${isDragging ? " is-dragging" : ""}`}

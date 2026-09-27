@@ -44,9 +44,11 @@ def test_register_seeds_free_plan_entitlements(client, db_session):
     user = db_session.execute(select(User).where(User.email == EMAIL)).scalar_one()
 
     assert user.monthly_processing_allowance_seconds == FREE_PLAN.usage_allowance_seconds == 600
-    assert user.preview_limit_seconds == FREE_PLAN.preview_limit_seconds == 30
-    assert user.has_full_preview is False
-    assert user.can_export is False
+    # Free carries the same capabilities as every paid plan; only its monthly
+    # processing allowance is smaller.
+    assert user.preview_limit_seconds is None
+    assert user.has_full_preview is True
+    assert user.can_export is True
     assert user.processing_used_seconds == 0
     assert user.usage_period_ends_at > user.usage_period_started_at
 
@@ -285,25 +287,38 @@ def test_entitlement_returns_free_plan_values(client):
     assert body["monthly_processing_allowance_seconds"] == 600
     assert body["processing_used_seconds"] == 0
     assert body["processing_remaining_seconds"] == 600
-    assert body["preview_limit_seconds"] == 30
-    assert body["has_full_preview"] is False
-    assert body["can_export"] is False
+    # Free gets the full finished preview and the export entitlement.
+    assert body["preview_limit_seconds"] is None
+    assert body["has_full_preview"] is True
+    assert body["can_export"] is True
     assert body["processing_allowance_minutes"] == 10.0
 
 
 def test_entitlement_ignores_client_supplied_values(client):
-    """Entitlement comes from the database, never from the request."""
+    """Entitlement is derived from the account, never from the request.
+
+    The spoofed fields are the ones a client would try to escalate. Since every
+    plan now has the same capabilities, the escalation that matters is the
+    monthly processing allowance.
+    """
     token = register(client).json()["access_token"]
 
     body = client.get(
         "/api/account/entitlement",
         headers=auth_header(token),
-        params={"plan": "pro_monthly", "has_full_preview": "true", "can_export": "true"},
+        params={
+            "plan": "pro_monthly",
+            "has_full_preview": "true",
+            "can_export": "true",
+            "monthly_processing_allowance_seconds": "90000",
+            "is_paid_plan": "true",
+        },
     ).json()
 
-    assert body["plan"] == FREE_PLAN_ID
-    assert body["has_full_preview"] is False
-    assert body["can_export"] is False
+    assert body["plan"] == "free"
+    assert body["is_paid_plan"] is False
+    assert body["monthly_processing_allowance_seconds"] == 600
+    assert body["processing_remaining_seconds"] == 600
 
 
 # --- Health ---

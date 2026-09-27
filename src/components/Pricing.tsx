@@ -155,10 +155,10 @@ export function Pricing() {
           <p className="eyebrow">Pricing</p>
           <h2 className="section__title">Plans that scale with your channel</h2>
           <p className="section__lede">
-            Every plan includes full caption editing, the complete caption designer, and .srt subtitle
-            export. Paid plans unlock the finished preview and carry a finished-video export
-            entitlement — the rendering that turns a project into a video file is not available yet,
-            so nothing today produces an MP4.
+            Every plan includes full caption editing, the complete caption designer, the full
+            finished preview, and .srt subtitle export. Plans differ in how much video you can
+            process each month. Finished-video export is included everywhere too — the renderer that
+            produces the video file is still on its way, so nothing today produces an MP4.
           </p>
         </header>
 
@@ -229,13 +229,11 @@ export function Pricing() {
                       <Check size={14} aria-hidden="true" />
                       {plan.has_full_preview
                         ? "Full finished-video preview"
-                        : `Finished preview limited to ${plan.preview_limit_seconds ?? 30} seconds`}
+                        : "Preview limited on this plan"}
                     </li>
                     <li>
                       <Check size={14} aria-hidden="true" />
-                      {plan.can_export
-                        ? "Finished-video export entitlement (renderer not yet available)"
-                        : "Finished-video export entitlement on paid plans"}
+                      Finished-video export included — renderer coming soon
                     </li>
                     <li>
                       <Check size={14} aria-hidden="true" />

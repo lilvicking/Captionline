@@ -106,11 +106,18 @@ FREE_PLAN = PlanDefinition(
     annual_savings_usd=0,
     usage_allowance_seconds=600,  # 10 minutes per month
     usage_period_months=1,
-    preview_limit_seconds=30,
-    has_full_preview=False,
-    can_export=False,
+    # Free is not a degraded tier. It carries the same capabilities as every
+    # paid plan: the full finished preview, and the finished-captioned-video
+    # export entitlement. Paid plans differ only in monthly processing capacity.
+    # `preview_limit_seconds=None` and `has_full_preview=True` are what make the
+    # finished preview unrestricted, and `can_export=True` is the export
+    # entitlement. Neither implies a renderer exists: producing an MP4 is a
+    # separate implementation question the product decides, not this catalogue.
+    preview_limit_seconds=None,
+    has_full_preview=True,
+    can_export=True,
     paid=False,
-    tagline="10 processing minutes a month, 30-second finished preview",
+    tagline="10 processing minutes a month, full preview and export entitlement",
     sort_order=0,
 )
 

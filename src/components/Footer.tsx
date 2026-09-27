@@ -30,8 +30,8 @@ export function Footer() {
         </span>
 
         <p className="footer__note">
-          Videos are transcribed by WhisperX and deleted shortly after processing. Free previews are
-          limited to 30 seconds.
+          Videos are transcribed by WhisperX and deleted shortly after processing. Every plan
+          includes the full finished preview.
         </p>
 
         <nav className="footer__links" aria-label="Legal">
