@@ -50,8 +50,11 @@ configuration, and Railway deployment.
 
 ## What Phase 3A adds
 
-- **Accounts** — sign up, log in, log out, and a lightweight account panel with plan and usage
+- **Accounts** — sign up, log in, log out, change password, and a lightweight account panel with plan and usage
   (for example `3.2 / 10 minutes used`).
+- **Password recovery** — a "Forgot password?" flow that emails a single-use reset link, plus
+  change-password while signed in. Reset tokens are stored hashed, expire, are single-use, and
+  revoke every session when redeemed.
 - **PostgreSQL** — SQLAlchemy 2.0 with Alembic migrations against the Railway Postgres service via
   `DATABASE_URL`.
 - **Server-authoritative plans and usage** — the free plan (10 processing minutes per month, 30
@@ -89,8 +92,9 @@ flow keeps working.
 Nothing below exists yet, by design:
 
 - No finished-video rendering (paid plans carry the entitlement only)
-- No email verification or password reset
+- No email verification of new addresses
 - No social/OAuth login
+- No account deletion
 - No Google Drive or other cloud storage integration
 - No permanent media storage (uploads are temporary and deleted immediately)
 - No speaker diarization, no translation, no analytics
@@ -173,6 +177,28 @@ because a real logout must invalidate a token immediately.
 The token is kept in `localStorage` and sent as `Authorization: Bearer`. The hardening path is
 httpOnly `SameSite=None; Secure` cookies plus CSRF protection; attaching the custom domain
 unblocks that, since `SameSite=None` is rejected across sites.
+
+### Password recovery
+
+`POST /api/auth/forgot-password` always returns one fixed message, whether the address is unknown,
+inactive, rate limited, or the mail provider is unconfigured — so account existence cannot be probed.
+
+The emailed link points at `/reset-password?token=…` on `FRONTEND_URL`. Only a SHA-256 hash of the
+token is stored, it expires after `PASSWORD_RESET_TTL_MINUTES` (default 60), and redeeming it takes
+a row lock so it cannot be used twice. Every rejection returns the same message, so a token cannot
+be probed for validity or prior use. A successful reset **revokes every login session**, on the
+assumption that a reset is a response to a suspected compromise.
+
+Abuse is limited twice: a durable per-account cooldown and outstanding-token cap, plus an in-process
+per-client-address throttle applied before any database work. A throttled request still returns the
+generic `200`, so the throttle is not observable either.
+
+`console` and `memory` email providers are development and test only, and are reachable solely by
+naming them explicitly in `EMAIL_PROVIDER` — a production deployment cannot print reset links to
+the log stream.
+
+> Because the reset link is a real path, the Railway web service needs an SPA rewrite so
+> `/reset-password` serves `index.html` on a direct load. The Vite dev server already does this.
 
 ## Stripe architecture
 
@@ -457,6 +483,13 @@ Server-side configuration lives in `backend/.env.example`:
 | Variable | Purpose |
 | -------- | ------- |
 | `DATABASE_URL` | PostgreSQL in production (`${{Postgres.DATABASE_URL}}`), optional locally |
+| `EMAIL_PROVIDER` | `resend` in production; `console`/`memory` are dev and test only |
+| `EMAIL_API_KEY` | Resend API key. Server side only |
+| `EMAIL_FROM` | Verified sender, e.g. `Captionline <no-reply@captionline.pro>` |
+| `PASSWORD_RESET_TTL_MINUTES` | Reset link lifetime (default 60) |
+| `PASSWORD_RESET_COOLDOWN_SECONDS` | Per-account cooldown between reset requests |
+| `PASSWORD_RESET_MAX_ACTIVE` | Cap on outstanding reset tokens per account |
+| `PASSWORD_RESET_IP_LIMIT` | Per-address throttle (best effort, per process) |
 | `STRIPE_SECRET_KEY` | Stripe API key. Absent means billing reports "not configured" |
 | `STRIPE_WEBHOOK_SECRET` | Verifies webhook signatures |
 | `STRIPE_PRICE_CREATOR_MONTHLY` | Price ID for Creator |

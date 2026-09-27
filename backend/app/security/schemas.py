@@ -112,3 +112,36 @@ class CheckoutResponse(BaseModel):
     session_id: str = ""
     url: str
     plan: str
+
+
+# --- Password reset ---------------------------------------------------------
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Deliberately identical whether or not the account exists.
+
+    The wording is the only signal a caller gets, and it never confirms or denies
+    that an address is registered.
+    """
+
+    message: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=512)
+    new_password: str = Field(min_length=1, max_length=1024)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=1, max_length=1024)
+
+
+class MessageResponse(BaseModel):
+    """A neutral confirmation with no account or token detail."""
+
+    message: str

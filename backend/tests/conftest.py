@@ -41,9 +41,13 @@ from app.db.session import get_engine  # noqa: E402
 from app.main import app  # noqa: E402
 
 #: Child rows first, so no table is cleared while another still references it.
+#: Keep this list in step with the schema: a missing table leaks rows into the
+#: next test, and because SQLite reuses ids after a delete, a stale row can attach
+#: itself to a freshly created user and trip per-account rate limits.
 _TABLES_IN_DELETE_ORDER = (
     "stripe_events",
     "usage_reservations",
+    "password_reset_tokens",
     "sessions",
     "users",
 )

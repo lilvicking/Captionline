@@ -102,7 +102,48 @@ class User(Base):
         lazy="selectin",
     )
 
+    password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
     __table_args__ = (Index("ix_users_plan_status", "plan", "subscription_status"),)
+
+
+class PasswordResetToken(Base):
+    """A single-use password reset token.
+
+    The raw token is generated with `secrets`, emailed to the account owner, and
+    never stored. Only its SHA-256 hash is persisted, so a database leak yields
+    nothing usable — the same approach already used for session tokens.
+
+    A token stops working when it is used (`used_at`), revoked explicitly
+    (`revoked_at`, for example when a newer one is issued or the password is
+    changed), or once `expires_at` passes.
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # SHA-256 hex of the emailed token. Unique so lookup is an index hit and a
+    # collision is impossible to insert twice.
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="password_reset_tokens")
+
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_password_reset_tokens_token_hash"),)
 
 
 # Usage reservation lifecycle.

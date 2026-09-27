@@ -130,6 +130,37 @@ Requires a token and an existing Stripe customer. Returns a Customer Portal URL.
 
 Stripe webhook receiver. Requires a valid `Stripe-Signature` header. Idempotent.
 
+### `GET /api/auth/me`
+
+Requires `Authorization: Bearer <token>`. Returns the authenticated user.
+
+### `POST /api/auth/logout`
+
+Revokes the presented session. The token stops working immediately.
+
+### `POST /api/auth/forgot-password`
+
+Body `{"email": "..."}`. Starts a password reset.
+
+Always answers `200` with one fixed message, whether the address is unknown, the
+account is inactive, the request is rate limited, or no email provider is
+configured. Nothing about account existence can be inferred from the response.
+
+### `POST /api/auth/reset-password`
+
+Body `{"token": "...", "new_password": "..."}`. Redeems a reset token.
+
+Every rejection — unknown, expired, already used, revoked — returns the same `400`
+and the same message, so a token cannot be probed. On success the password is
+rehashed with Argon2id, the token is consumed, every other outstanding token for
+the account is revoked, and **all login sessions are revoked**.
+
+### `POST /api/auth/change-password`
+
+Requires a session. Body `{"current_password": "...", "new_password": "..."}`.
+Verifies the current password, then revokes every session and outstanding reset
+token. The caller is signed out too.
+
 ### Status codes
 
 | Code | Meaning |
@@ -652,6 +683,72 @@ backend/
 
 ---
 
+## Password recovery
+
+### Token design
+
+`password_reset_tokens` mirrors the existing `sessions` approach:
+
+* The raw token is generated with `secrets` (256 bits), emailed once, and **never
+  stored**. Only its SHA-256 hash is persisted, so a database leak yields nothing
+  usable.
+* Single use. Consuming a token takes a `SELECT ... FOR UPDATE` row lock, so two
+  concurrent submissions with the same token cannot both succeed — the second
+  blocks, then observes `used_at` and is rejected.
+* Expiring. `PASSWORD_RESET_TTL_MINUTES` (default 60).
+* Issuing a newer token revokes the account's older outstanding tokens, so an
+  older emailed link stops working.
+* A successful reset or password change revokes **all login sessions**, because a
+  reset is the standard response to a suspected compromise and a session minted
+  with the old password must not survive it.
+
+### Abuse protection
+
+Two independent guards:
+
+* **Per account, durable** — a cooldown between requests and a cap on outstanding
+  tokens (`PASSWORD_RESET_COOLDOWN_SECONDS`, `PASSWORD_RESET_MAX_ACTIVE`).
+* **Per client address, best effort** — an in-process fixed-window throttle
+  (`PASSWORD_RESET_IP_LIMIT`, `PASSWORD_RESET_IP_WINDOW_SECONDS`) applied before
+  any database work, so a flood costs nothing and stores no personal data. It
+  resets on restart and is per replica; the per-account limits are the durable half.
+
+A throttled request still returns the generic `200`, so throttling is not
+observable either.
+
+### Email
+
+`app/email.py` is a provider abstraction, so the vendor lives in one place.
+`EMAIL_PROVIDER` selects it:
+
+| Value | Behaviour |
+| ----- | --------- |
+| `resend` | HTTP API call. Requires `EMAIL_API_KEY`. Used in production. |
+| `console` | Writes the message to the log. Local development only. |
+| `memory` | Retains messages in memory. Tests only. |
+| anything else / unset | No provider. Reset answers generically and sends nothing. |
+
+`console` and `memory` are only reachable when named explicitly, so a production
+deployment cannot print reset links to the log stream. Delivery is server side
+only; the frontend never sees the API key.
+
+The reset link is built from `FRONTEND_URL`, never a hardcoded domain, and the
+token is percent-encoded into the query string, so it cannot become an open
+redirect. Neither passwords nor raw tokens are ever logged.
+
+### Frontend
+
+The reset page lives at a real path (`/reset-password`) because the link arrives
+by email and must survive a full page load. Captionline has no router
+dependency, so `src/auth/route.ts` adds just enough History API support for that
+one route.
+
+> **Deployment note.** Because the reset link is a real path, the Railway web
+> service needs an SPA rewrite so `/reset-password` serves `index.html` rather
+> than 404 on a direct load. The Vite dev server already does this.
+
+---
+
 ## Known limitations
 
 - **Long uploads and timeouts.** Transcription is synchronous. A long video on CPU can take far
@@ -659,7 +756,9 @@ backend/
   background-job design.
 - **One transcription at a time per process.** WhisperX model inference is guarded by a lock, so
   concurrent requests queue. Multiple replicas would scale this out.
-- **No email verification or password reset.** Deliberately out of scope.
+- **No email verification.** Password recovery exists; address verification does not.
+- **The per-address reset throttle is per process.** It resets on restart and is not shared across
+  Railway replicas. The per-account limits are the durable protection.
 - **Session tokens live in `localStorage`.** Acceptable now given the cross-origin setup; see the
   authentication tradeoff note. Attaching the custom domain would unblock httpOnly cookies.
 - **Finished-video rendering does not exist.** `can_export` is granted as an *entitlement* only. The

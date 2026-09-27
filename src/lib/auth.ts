@@ -153,3 +153,36 @@ export function fetchEntitlement(token: string): Promise<AccountEntitlement> {
 export function logoutAccount(token: string): Promise<void> {
   return postJson<void>("/api/auth/logout", {}, token);
 }
+
+/* -------------------------------------------------------------------------- */
+/* Password recovery                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Requests a password reset email.
+ *
+ * Resolves for every outcome, including an unknown address: the backend always
+ * answers with one generic message so account existence cannot be probed.
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  await postJson<unknown>("/api/auth/forgot-password", { email });
+}
+
+/** Redeems a reset token and sets a new password. */
+export async function resetPassword(
+  token: string,
+  newPassword: string,
+): Promise<void> {
+  await postJson<unknown>("/api/auth/reset-password", { token, new_password: newPassword });
+}
+
+/** Changes the password for the signed-in account. */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await postJson<unknown>("/api/auth/change-password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+}

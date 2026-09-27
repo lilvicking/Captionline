@@ -8,6 +8,8 @@ import { ProcessingState, type TranscriptionJob } from "./components/ProcessingS
 import { Editor } from "./components/editor/Editor";
 import { AccountPanel } from "./auth/AccountPanel";
 import { useAuth } from "./auth/AuthContext";
+import { ResetPasswordPage } from "./auth/ResetPasswordPage";
+import { RESET_PASSWORD_PATH, usePathname } from "./auth/route";
 import { createSampleCues } from "./data/sampleCaptions";
 import { TranscriptionError, failureReasonFor, segmentsToCues, transcribeFile } from "./lib/api";
 import { getStoredToken } from "./lib/auth";
@@ -39,6 +41,7 @@ export function App() {
 
   const objectUrlRef = useRef<string | null>(null);
   const { status: authStatus, refresh: refreshAccount } = useAuth();
+  const pathname = usePathname();
 
   const isAuthenticated = authStatus === "authenticated";
 
@@ -179,6 +182,16 @@ export function App() {
   const showPlans = useCallback(() => {
     document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
+
+  // The password reset link arrives by email and must survive a full page load,
+  // so it gets a real URL rather than living inside the app's state machine.
+  if (pathname === RESET_PASSWORD_PATH) {
+    return (
+      <div className="app">
+        <ResetPasswordPage />
+      </div>
+    );
+  }
 
   if (stage === "processing") {
     return (

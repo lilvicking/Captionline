@@ -122,6 +122,45 @@ class Settings:
         default_factory=lambda: _env_int("SESSION_CLEANUP_INTERVAL_SECONDS", 900)
     )
 
+    # --- Password reset ---------------------------------------------------
+    # How long a reset link stays usable.
+    password_reset_ttl_minutes: int = field(
+        default_factory=lambda: _env_int("PASSWORD_RESET_TTL_MINUTES", 60)
+    )
+    # Per-account abuse control. A new request is only honoured once the
+    # cooldown has passed, so a single address cannot flood the mail provider.
+    password_reset_cooldown_seconds: int = field(
+        default_factory=lambda: _env_int("PASSWORD_RESET_COOLDOWN_SECONDS", 60)
+    )
+    # Older outstanding tokens for an account are revoked once this many exist.
+    password_reset_max_active: int = field(
+        default_factory=lambda: _env_int("PASSWORD_RESET_MAX_ACTIVE", 3)
+    )
+    # Per-client-address throttle, applied before any database work. In-process
+    # and therefore best effort: it needs no personal data and cannot grow
+    # without bound, but it resets on restart and is per replica.
+    password_reset_ip_limit: int = field(
+        default_factory=lambda: _env_int("PASSWORD_RESET_IP_LIMIT", 5)
+    )
+    password_reset_ip_window_seconds: int = field(
+        default_factory=lambda: _env_int("PASSWORD_RESET_IP_WINDOW_SECONDS", 900)
+    )
+
+    # --- Transactional email ----------------------------------------------
+    # "resend" in production, "console" for local development, "memory" for
+    # tests. Unset means no provider, and password reset reports that email is
+    # unavailable without revealing whether the account exists.
+    email_provider: str = field(
+        default_factory=lambda: _env_str("EMAIL_PROVIDER", "none").lower()
+    )
+    email_api_key: str | None = field(default_factory=lambda: _env_optional("EMAIL_API_KEY"))
+    email_from: str = field(
+        default_factory=lambda: _env_str("EMAIL_FROM", "Captionline <no-reply@captionline.pro>")
+    )
+    email_timeout_seconds: int = field(
+        default_factory=lambda: _env_int("EMAIL_TIMEOUT_SECONDS", 10)
+    )
+
     # --- Stripe (Phase 3B) ------------------------------------------------
     # No value here is ever invented or committed. When these are absent the
     # billing endpoints report that Stripe is not configured and the rest of the
@@ -184,6 +223,26 @@ class Settings:
     @property
     def cors_allows_any(self) -> bool:
         return "*" in self.cors_origins
+
+    @property
+    def email_is_configured(self) -> bool:
+        """Whether a usable transactional email provider is configured.
+
+        "console" and "memory" are development/test providers. They are only ever
+        active when explicitly selected through EMAIL_PROVIDER, never as a
+        fallback, so a production deployment cannot silently print reset links.
+        """
+        provider = self.email_provider
+
+        if provider == "resend":
+            return bool(self.email_api_key)
+
+        return provider in {"console", "memory"}
+
+    @property
+    def email_provider_is_development_only(self) -> bool:
+        """True when the configured provider must never be used in production."""
+        return self.email_provider in {"console", "memory"}
 
 
 def resolve_device(requested: str) -> str:

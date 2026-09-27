@@ -29,7 +29,7 @@ from .config import get_settings
 from .db.models import User
 from .db.session import get_db, is_configured
 from .media import MediaProbeError, billable_seconds, probe_media
-from .routers import account, auth, billing
+from .routers import account, auth, billing, password_reset
 from .schemas import DatabaseHealth, HealthResponse, StripeHealth, TranscriptionResponse
 from .security.deps import get_current_user
 from .security.sessions import purge_expired_sessions
@@ -126,6 +126,7 @@ else:
     )
 
 app.include_router(auth.router)
+app.include_router(password_reset.router)
 app.include_router(account.router)
 app.include_router(billing.router)
 
