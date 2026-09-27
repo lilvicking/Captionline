@@ -18,6 +18,12 @@ export const RESET_PASSWORD_PATH = "/reset-password";
 export const TERMS_PATH = "/terms";
 export const PRIVACY_PATH = "/privacy";
 export const CONTACT_PATH = "/contact";
+/**
+ * The support console. Deliberately absent from customer navigation: the entry
+ * point is a small link inside the Account sheet, shown only to accounts the
+ * server reports as administrators.
+ */
+export const ADMIN_PATH = "/admin";
 
 /** Event used to notify the app that an in-app navigation happened. */
 const NAVIGATE_EVENT = "captionline:navigate";

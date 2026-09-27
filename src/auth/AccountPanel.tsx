@@ -6,6 +6,7 @@ import {
   LogOut,
   Mail,
   RefreshCw,
+  ShieldCheck,
   Trash2,
   TriangleAlert,
   User as UserIcon,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { isUnauthorized, useAuth } from "./AuthContext";
 import { ForgotPasswordForm } from "./ForgotPasswordForm";
+import { ADMIN_PATH, navigateTo } from "./route";
 import { changePassword, deleteAccount, getStoredToken } from "../lib/auth";
 import { openBillingPortal } from "../lib/billing";
 
@@ -415,6 +417,26 @@ export function AccountPanel({ onClose }: AccountPanelProps) {
               Subscription status: {account.subscription_status}. Cancel or update it in the billing
               portal.
             </p>
+          ) : null}
+
+          {/*
+            The support console is intentionally not in the main navigation. It
+            appears here only for accounts the server reports as administrators,
+            and every admin endpoint enforces that independently, so hiding the
+            link is presentation only.
+          */}
+          {account?.is_admin ? (
+            <button
+              className="button button--ghost button--block"
+              type="button"
+              onClick={() => {
+                onClose();
+                navigateTo(ADMIN_PATH);
+              }}
+            >
+              <ShieldCheck size={15} aria-hidden="true" />
+              Admin
+            </button>
           ) : null}
 
           <button

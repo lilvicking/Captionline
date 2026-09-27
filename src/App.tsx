@@ -10,7 +10,9 @@ import { Editor } from "./components/editor/Editor";
 import { AccountPanel } from "./auth/AccountPanel";
 import { isUnauthorized, useAuth } from "./auth/AuthContext";
 import { ResetPasswordPage } from "./auth/ResetPasswordPage";
+import { AdminPage } from "./admin/AdminPage";
 import {
+  ADMIN_PATH,
   CONTACT_PATH,
   HOME_PATH,
   navigateTo,
@@ -262,6 +264,17 @@ export function App() {
       {accountSheet}
     </div>
   );
+
+  // The support console. Access is enforced on the server for every admin
+  // endpoint; this route only decides what to draw, and a non-administrator
+  // simply gets whatever the server says when they call it.
+  if (pathname === ADMIN_PATH) {
+    return (
+      <div className="app">
+        <AdminPage />
+      </div>
+    );
+  }
 
   // The password reset link arrives by email and must survive a full page load,
   // so it gets a real URL rather than living inside the app's state machine.

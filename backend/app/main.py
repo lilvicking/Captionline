@@ -33,8 +33,9 @@ from .db.session import get_db, is_configured
 from .headers import SecurityHeadersMiddleware
 from .media import MediaProbeError, billable_seconds, probe_media
 from .ratelimit import enforce, reset_rate_limits
-from .routers import account, auth, billing, export, password_reset
+from .routers import account, admin, auth, billing, export, password_reset
 from .routers.account import legal_router
+from .routers.admin import sync_admin_emails
 from .render.ffmpeg import ffmpeg_available, ffprobe_available
 from .schemas import (
     DatabaseHealth,
@@ -241,6 +242,21 @@ async def lifespan(app: FastAPI):
     if settings.preload_model:
         # Off the event loop: model loading can take a while.
         await run_in_threadpool(preload, settings)
+
+    # Apply the ADMIN_EMAILS allow-list. A no-op when it is unset.
+    try:
+        from .db.session import get_session_factory
+
+        factory = get_session_factory()
+        if factory is not None:
+            session = factory()
+            try:
+                await run_in_threadpool(sync_admin_emails, session)
+            finally:
+                session.close()
+    except Exception as exc:  # pragma: no cover - never block startup on this
+        logger.warning("Could not apply ADMIN_EMAILS: %s", type(exc).__name__)
+
     yield
 
 
@@ -286,6 +302,7 @@ app.include_router(account.router)
 app.include_router(legal_router)
 app.include_router(billing.router)
 app.include_router(export.router)
+app.include_router(admin.router)
 
 
 def _database_health() -> DatabaseHealth:

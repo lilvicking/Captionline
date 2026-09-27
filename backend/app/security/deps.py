@@ -177,13 +177,33 @@ def get_optional_user(
     return user
 
 
+ADMIN_REQUIRED = "Administrator access is required."
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Refuse the request unless the account is an administrator.
+
+    Enforcement is entirely server side and reads the durable `is_admin` column,
+    which is only ever written from the `ADMIN_EMAILS` allow-list at startup. No
+    endpoint a signed-in user can call sets this flag, and it is never derived
+    from a paid plan or an email domain, so there is no client-controlled path to
+    it.
+    """
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail=ADMIN_REQUIRED)
+
+    return user
+
+
 __all__ = [
+    "ADMIN_REQUIRED",
     "CREDENTIALS_REQUIRED",
     "DATABASE_UNAVAILABLE",
     "INVALID_CREDENTIALS",
     "get_current_user",
     "get_optional_user",
     "get_settings",
+    "require_admin",
     "require_database",
     "revoke_current_session",
 ]

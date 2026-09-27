@@ -235,15 +235,17 @@ def legal_versions() -> LegalVersionsResponse:
     )
 
 
-def _to_entitlement(snapshot) -> EntitlementResponse:
+def _to_entitlement(snapshot, user) -> EntitlementResponse:
     return EntitlementResponse(
         plan=snapshot.plan,
         plan_label=snapshot.plan_label,
         subscription_status=snapshot.subscription_status,
         is_paid_plan=snapshot.is_paid_plan,
+        is_admin=bool(user.is_admin),
         monthly_processing_allowance_seconds=snapshot.monthly_processing_allowance_seconds,
         processing_used_seconds=snapshot.processing_used_seconds,
         processing_reserved_seconds=snapshot.processing_reserved_seconds,
+        bonus_processing_seconds=snapshot.bonus_processing_seconds,
         processing_remaining_seconds=snapshot.processing_remaining_seconds,
         usage_period_started_at=snapshot.usage_period_started_at,
         usage_period_ends_at=snapshot.usage_period_ends_at,
@@ -270,7 +272,7 @@ def entitlement(
     client cannot influence it, which is the point: the frontend must never be
     the authority on what an account is entitled to.
     """
-    return _to_entitlement(build_usage_snapshot(db, user))
+    return _to_entitlement(build_usage_snapshot(db, user), user)
 
 
 @router.get("/plans", response_model=list[PlanResponse])

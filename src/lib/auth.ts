@@ -34,6 +34,9 @@ export type AccountEntitlement = {
   plan_label: string;
   subscription_status: string;
   is_paid_plan: boolean;
+  /** Whether this account may open the support console. */
+  is_admin: boolean;
+  bonus_processing_seconds: number;
   monthly_processing_allowance_seconds: number;
   processing_used_seconds: number;
   processing_reserved_seconds: number;

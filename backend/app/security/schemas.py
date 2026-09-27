@@ -61,10 +61,16 @@ class EntitlementResponse(BaseModel):
     plan_label: str
     subscription_status: str
     is_paid_plan: bool
+    #: Whether this account may open the support console. The frontend uses it
+    #: only to decide whether to offer the link; the server enforces access on
+    #: every admin endpoint regardless.
+    is_admin: bool = False
 
     monthly_processing_allowance_seconds: int
     processing_used_seconds: int
     processing_reserved_seconds: int
+    #: Administrative goodwill credit, added to the plan allowance.
+    bonus_processing_seconds: int = 0
     processing_remaining_seconds: int
 
     usage_period_started_at: datetime

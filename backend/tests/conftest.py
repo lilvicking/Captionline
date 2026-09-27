@@ -43,10 +43,11 @@ from app.main import app  # noqa: E402
 #: Child rows first, so no table is cleared while another still references it.
 #: Keep this list in step with the schema: a missing table leaks rows into the
 #: next test, and because SQLite reuses ids after a delete, a stale row can attach
-#: itself to a freshly created user and trip per-account rate limits.
+#: itself to a freshly created user.
 _TABLES_IN_DELETE_ORDER = (
     "rate_limit_buckets",
     "stripe_events",
+    "admin_audit_log",
     "usage_reservations",
     "password_reset_tokens",
     "sessions",

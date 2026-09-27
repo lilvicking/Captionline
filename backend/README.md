@@ -240,6 +240,104 @@ never touches usage accounting.
 | 503 | FFmpeg or ffprobe is unavailable |
 | 504 | The render exceeded its time budget |
 
+### `GET /api/admin/summary`
+
+Requires an administrator. Returns account counts for orientation: total, Free, paid, accounts
+holding credit, and total outstanding credit seconds.
+
+### `GET /api/admin/users?q=<email or id>`
+
+Requires an administrator. Server-side search over email, or by numeric id, capped at 25 results, so
+the console never downloads the customer table to filter it in the browser.
+
+### `GET /api/admin/users/{id}`
+
+Requires an administrator. Support view of one account: plan, subscription state, monthly
+allowance, used, remaining, usage-period bounds, credit balance, effective remaining, preview and
+export entitlements, and consent timestamps.
+
+Deliberately absent, because each is either a credential or unnecessary: the password hash, session
+and reset tokens, and any payment data. The response is assembled field by field, so passing the
+model through cannot leak one, and a test asserts the forbidden key names are absent.
+
+### `POST /api/admin/users/{id}/credits`
+
+Requires an administrator. Body `{"minutes": 30, "reason": "Transcription issue"}`. A positive
+value grants credit, a negative value corrects a previous grant. The reason is mandatory and the
+adjustment is capped at 24 hours. **An administrator cannot adjust their own credit**, because
+self-granting would manufacture usage outside the audited support process.
+
+### `GET /api/admin/users/{id}/audit`
+
+Requires an administrator. Recent administrative actions against one account, newest first.
+
+---
+
+## Administrative support console
+
+For owner administration, customer support, and goodwill processing credit.
+
+### Authorization
+
+Access is decided on the server, from the durable `users.is_admin` column, enforced by
+`require_admin` on **every** admin route. That column is only ever written by applying the
+`ADMIN_EMAILS` allow-list at startup, so there is no client-controlled path to it. It is never
+inferred from a paid plan or an email domain, and no endpoint exists that a signed-in user can call
+to change it.
+
+### Bootstrap
+
+`ADMIN_EMAILS` is a comma-separated allow-list, applied on startup:
+
+| Value | Effect |
+| ----- | ------ |
+| unset or empty | **No change.** Nobody is made an administrator, so an unconfigured deployment cannot expose the console, and an existing administrator is never locked out by a typo. |
+| set | Authoritative. Listed accounts gain administrator access; every other account loses it. |
+
+Revoking the last administrator means pointing the variable at an address no account uses and
+redeploying. The frontend only decides whether to draw an "Admin" link, inside the Account sheet; a
+non-administrator who navigates to `/admin` directly gets whatever the server says.
+
+### Deliberately not built
+
+Each of these turns routine support into account takeover, so none exists:
+
+* reading a customer's password hash, session token, or reset token
+* setting a customer's password
+* impersonating a customer or logging in as one
+* spoofing a Stripe plan to grant processing time
+
+### Processing credit
+
+Support grants extra processing time through `users.bonus_processing_seconds`, an **addition** to
+the plan allowance that is never a replacement for it.
+
+| Rule | Behaviour |
+| ---- | --------- |
+| Consumption order | The monthly plan allowance is spent first; credit is used only for the excess. |
+| `processing_used_seconds` | Never inflated past the plan allowance to represent credit usage, so the monthly figure keeps meaning "of your plan allowance". |
+| Monthly reset | Restores the plan allowance. Credit is not part of the monthly cycle and persists until consumed. |
+| Failed transcription | The hold is released, so a failure never burns credit. |
+| Concurrency | Holds are taken off the *combined* balance under the same row lock as before, so two simultaneous requests cannot overspend plan plus credit. |
+| Corrections | A separate audit row, never a rewrite. The balance is never allowed below zero. |
+
+### Audit log
+
+Every administrative mutation writes a row to `admin_audit_log` in PostgreSQL, not just a log line:
+the administering account, the target account, the action, the signed amount in seconds, the reason,
+and the timestamp. It stores no credentials, no payment data, and no customer media. Rows are
+removed with the account, because an audit row about a specific person should not outlive that
+person's data.
+
+### Account deletion
+
+Deleting an account cascades its sessions, reset tokens, allowance holds, and audit rows. Nothing
+here interferes with the Stripe Customer Portal, and a customer's right to cancel and seek a refund
+is untouched. Credit is something an administrator may choose to offer; the customer decides
+whether that resolves their issue.
+
+---
+
 ### Status codes
 
 | Code | Meaning |
@@ -251,11 +349,12 @@ never touches usage accounting.
 | 401 | Missing, invalid, revoked, or expired session |
 | 402 | Not enough processing allowance remaining |
 | 409 | Email already registered, or account deletion blocked by an active subscription |
-| 413 | File exceeds `MAX_UPLOAD_MB`, or media exceeds the duration cap |
+| 413 | File exceeds `MAX_UPLOAD_MB`, or media exceeds the duration cap, or the payload is oversized |
 | 422 | Invalid payload, unreadable media, or no audio track |
-| 429 | Rate limit reached. `Retry-After` is set; the body is deliberately generic |
+| 429 | Rate limit reached, or a render is already running |
 | 502 | Stripe unreachable |
 | 503 | WhisperX unavailable, Stripe not configured, or no `DATABASE_URL` |
+| 504 | The render exceeded its time budget |
 
 ---
 

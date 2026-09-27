@@ -1450,6 +1450,277 @@ textarea {
   line-height: 1.45;
 }
 
+/* ---------- Admin support console ---------- */
+
+.admin {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 40px 20px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.admin__head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin__title {
+  font-size: 1.5rem;
+  color: var(--black);
+}
+
+.admin__subtitle {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin-top: 6px;
+}
+
+.admin__text {
+  font-size: 0.9rem;
+  color: var(--gray-600, #5a5a63);
+  line-height: 1.55;
+}
+
+.admin__muted {
+  color: var(--gray-400);
+  font-size: 0.8rem;
+}
+
+.admin__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--gray-500);
+  font-size: 0.9rem;
+}
+
+.admin__card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.admin__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+}
+
+.admin__stat-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--black);
+}
+
+.admin__stat-label {
+  font-size: 0.75rem;
+  color: var(--gray-400);
+}
+
+.admin__search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin__search-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin__input {
+  flex: 1;
+  min-width: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  font-size: 0.9rem;
+}
+
+.admin__input:focus {
+  border-color: var(--gray-400);
+  outline: none;
+}
+
+.admin__input--inline {
+  flex: 0 0 120px;
+  min-width: 0;
+}
+
+.admin__results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin__result {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  text-align: left;
+}
+
+.admin__result:hover {
+  border-color: var(--gray-400);
+  background: var(--gray-050);
+}
+
+.admin__result-email {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.admin__result-meta {
+  font-size: 0.75rem;
+  color: var(--gray-400);
+}
+
+.admin__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 18px;
+  margin: 4px 0;
+}
+
+.admin__facts dt {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gray-400);
+}
+
+.admin__facts dd {
+  margin: 2px 0 0;
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+
+.admin__strong {
+  font-weight: 700;
+}
+
+.admin__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.admin__chip {
+  padding: 6px 10px;
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
+  background: var(--white);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--gray-700);
+}
+
+.admin__chip:hover {
+  border-color: var(--gray-400);
+}
+
+.admin__chip.is-active {
+  border-color: var(--red);
+  background: var(--red-tint);
+  color: var(--red-dark);
+}
+
+.admin__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm);
+  background: var(--red-tint);
+}
+
+.admin__confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin__message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.admin__message svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.admin__message--ok {
+  border: 1px solid var(--gray-200);
+  background: var(--gray-050);
+  color: var(--ink);
+}
+
+.admin__message--error {
+  border: 1px solid var(--red);
+  background: var(--red-tint);
+  color: var(--red-dark);
+}
+
+.admin__audit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin__audit-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--gray-200);
+}
+
+.admin__audit-action {
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.admin__audit-meta {
+  font-size: 0.75rem;
+  color: var(--gray-400);
+}
+
 /* ---------- Account sheet ---------- */
 
 .nav__actions {

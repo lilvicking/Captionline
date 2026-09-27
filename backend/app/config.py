@@ -364,6 +364,26 @@ class Settings:
         """Whether a Stripe secret key is present."""
         return bool(self.stripe_secret_key)
 
+    # --- Administrative support console ---------------------------------
+    # Comma-separated allow-list of email addresses whose accounts are
+    # administrators. Checked at startup, server side only.
+    #
+    # Empty (the default) means NOBODY is an administrator and no change is
+    # made, so an unconfigured deployment cannot accidentally expose the
+    # console. When set, the list is authoritative: listed accounts are granted
+    # administrator access and every other account has it removed, so revoking
+    # access is a matter of editing the variable and redeploying.
+    admin_emails: str = field(default_factory=lambda: _env_str("ADMIN_EMAILS", ""))
+
+    @property
+    def admin_email_set(self) -> set[str]:
+        """Normalised administrator addresses from configuration."""
+        return {
+            entry.strip().lower()
+            for entry in self.admin_emails.split(",")
+            if entry.strip()
+        }
+
     @property
     def stripe_billing_is_configured(self) -> bool:
         """Whether Stripe can actually create checkout sessions.

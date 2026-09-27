@@ -81,6 +81,18 @@ class User(Base):
     )
     usage_period_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    # --- Support credit (administrative) ---
+    # Extra processing time granted by an administrator as goodwill. It is an
+    # ADDITION to the plan allowance, never a replacement for it, and it is
+    # deliberately not reset by the monthly usage-period rollover: credit
+    # persists until it is consumed or an administrator removes it.
+    #
+    # Consumption order is "plan allowance first, then credit", so the monthly
+    # allowance is always spent before any goodwill credit is touched.
+    bonus_processing_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+
     # --- Entitlements (read model served to the frontend) ---
     # None means an unrestricted preview.
     preview_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -88,6 +100,12 @@ class User(Base):
     can_export: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # --- Administrative capability ---
+    # Set only from the ADMIN_EMAILS allow-list at startup. There is deliberately
+    # no endpoint a signed-in user can call to change this, and it is never
+    # inferred from a paid plan or an email domain.
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # --- Legal consent ---
     # Recorded, never enforced. NULL means "we did not record an agreement",
@@ -122,6 +140,19 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="selectin",
+    )
+
+    # Administrative actions taken *against* this account. Cascaded with the
+    # account, because the audit row is about a specific person and keeping it
+    # after they delete their account would retain their data.
+    #
+    # `admin_audit_log` has two foreign keys onto users, so the join condition
+    # has to name which one this relationship follows.
+    audit_entries_as_target: Mapped[list["AdminAuditEntry"]] = relationship(
+        back_populates="target_user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        foreign_keys="AdminAuditEntry.target_user_id",
     )
 
     # The `ondelete="CASCADE"` on `usage_reservations.user_id` is enforced by the
@@ -307,3 +338,51 @@ class Session(Base):
     user: Mapped["User"] = relationship(back_populates="sessions")
 
     __table_args__ = (UniqueConstraint("token_hash", name="uq_sessions_token_hash"),)
+
+
+# Administrative action names, kept as constants so a typo cannot silently create
+# an unrecognised audit category.
+ACTION_CREDIT_GRANTED = "credit_granted"
+ACTION_CREDIT_REMOVED = "credit_removed"
+ACTION_PRIVILEGE_CHANGED = "privilege_changed"
+
+
+class AdminAuditEntry(Base):
+    """One administrative action, recorded so support work is traceable.
+
+    This is a persistent trail in PostgreSQL, not just a log line: Railway log
+    retention is short and not queryable per customer.
+
+    Deliberately does **not** record credentials, password hashes, session or
+    reset tokens, or any payment data. It records who acted, on whom, what, by
+    how much, and why.
+    """
+
+    __tablename__ = "admin_audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    #: The administrator who acted.
+    admin_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: The customer the action affected.
+    target_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Signed change in seconds. Negative removes a previously granted credit.
+    amount_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Why the action was taken. Required by the API.
+    reason: Mapped[str] = mapped_column(String(280), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    admin_user: Mapped["User"] = relationship(foreign_keys=[admin_user_id])
+    target_user: Mapped["User"] = relationship(
+        back_populates="audit_entries_as_target", foreign_keys=[target_user_id]
+    )
+
+    __table_args__ = (Index("ix_admin_audit_target_created", "target_user_id", "created_at"),)

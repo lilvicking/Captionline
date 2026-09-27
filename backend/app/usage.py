@@ -23,6 +23,7 @@ a TTL.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -36,7 +37,9 @@ from .db.models import (
     UsageReservation,
     User,
 )
-from .plans import get_plan
+from .plans import PLANS, get_plan
+
+logger = logging.getLogger(__name__)
 
 #: Sentinels and limits
 MIN_RESERVED_SECONDS = 1
@@ -113,6 +116,10 @@ def apply_plan_to_user(user: User, plan_id: str | None = None) -> None:
     user.preview_limit_seconds = plan.preview_limit_seconds
     user.has_full_preview = plan.has_full_preview
     user.can_export = plan.can_export
+
+    # `bonus_processing_seconds` is deliberately NOT touched here: it is an
+    # administrative credit, not part of the plan, and re-applying a plan must
+    # never quietly destroy goodwill credit already granted.
 
     if not user.subscription_status:
         from .plans import SUBSCRIPTION_NONE
@@ -193,19 +200,69 @@ def active_reserved_seconds(db: OrmSession, user_id: int) -> int:
     return int(total or 0)
 
 
+def resync_entitlements(db: OrmSession) -> int:
+    """Re-copy catalogue entitlements onto accounts whose stored values disagree.
+
+    The entitlement columns are a read model copied onto the account row at
+    registration, so an account created before a plan's capabilities changed
+    keeps the old values indefinitely. This repairs them.
+
+    Returns the number of accounts updated. Safe to run repeatedly: a row that
+    already matches is left alone, so it never touches usage, subscription, or
+    identity data.
+
+    Migration ``0006_admin_credits`` performs the same correction with literal
+    values, because a migration must not depend on application code that may
+    change shape after it has run. ``test_migration_matches_catalogue`` keeps the
+    two in step.
+    """
+    changed = 0
+
+    for user in db.scalars(select(User)).all():
+        plan = get_plan(user.plan)
+        stale = (
+            int(user.monthly_processing_allowance_seconds or 0) != plan.usage_allowance_seconds
+            or bool(user.has_full_preview) != plan.has_full_preview
+            or bool(user.can_export) != plan.can_export
+            or user.preview_limit_seconds != plan.preview_limit_seconds
+        )
+
+        if stale:
+            apply_plan_to_user(user, plan.id)
+            changed += 1
+
+    if changed:
+        db.commit()
+        logger.info("Re-synced stored entitlements for %s account(s).", changed)
+
+    return changed
+
+
+def available_seconds(allowance: int, used: int, bonus: int, held: int) -> int:
+    """Seconds genuinely available once in-flight holds are taken into account.
+
+    Holds come off the *combined* balance rather than the plan allowance alone.
+    Subtracting them only from the plan would floor at zero and quietly
+    overstate what is left as soon as the monthly allowance is spent, which is
+    exactly when credit starts being used.
+    """
+    return max(allowance - used + max(bonus, 0) - max(held, 0), 0)
+
+
 def remaining_allowance_seconds(db: OrmSession, user: User, now: datetime | None = None) -> int:
-    """Seconds available right now, accounting for in-flight reservations.
+    """Seconds available right now: plan allowance plus credit, minus holds.
 
     Never returns a negative value, so a balance can never go below zero.
     """
     now = now or utcnow()
     ensure_current_usage_period(user, now)
 
-    allowance = int(user.monthly_processing_allowance_seconds or 0)
-    used = int(user.processing_used_seconds or 0)
-    held = active_reserved_seconds(db, user.id)
-
-    return max(allowance - used - held, 0)
+    return available_seconds(
+        allowance=int(user.monthly_processing_allowance_seconds or 0),
+        used=int(user.processing_used_seconds or 0),
+        bonus=int(user.bonus_processing_seconds or 0),
+        held=active_reserved_seconds(db, user.id),
+    )
 
 
 def reserve_processing_seconds(
@@ -255,14 +312,18 @@ def reserve_processing_seconds(
     allowance = int(locked_user.monthly_processing_allowance_seconds or 0)
     used = int(locked_user.processing_used_seconds or 0)
     held = active_reserved_seconds(db, locked_user.id)
-    remaining = max(allowance - used - held, 0)
+    bonus = int(locked_user.bonus_processing_seconds or 0)
+
+    # Plan allowance first, then any administrative credit. The credit is an
+    # addition, so the monthly allowance is always spent before goodwill is.
+    remaining = available_seconds(allowance, used, bonus, held)
 
     if required > remaining:
         db.rollback()
         raise AllowanceExceededError(
             required_seconds=required,
             remaining_seconds=remaining,
-            allowance_seconds=allowance,
+            allowance_seconds=allowance + max(bonus, 0),
             used_seconds=used,
         )
 
@@ -312,12 +373,31 @@ def finalize_reservation(
 
     allowance = int(user.monthly_processing_allowance_seconds or 0)
     used = int(user.processing_used_seconds or 0)
-    # Clamp so a corrupted or manually edited value cannot go negative.
-    user.processing_used_seconds = min(used + reservation.reserved_seconds, max(allowance, 0))
+    bonus = max(int(user.bonus_processing_seconds or 0), 0)
+
+    # Split the charge: the monthly allowance is consumed first, and only what
+    # spills over comes out of the administrative credit. Keeping the two in
+    # separate columns means the monthly figure still means "of your plan
+    # allowance", instead of being inflated past its own limit to represent a
+    # credit that was granted as something extra.
+    plan_remaining = max(allowance - used, 0)
+    from_plan = min(reservation.reserved_seconds, plan_remaining)
+    from_bonus = reservation.reserved_seconds - from_plan
+
+    user.processing_used_seconds = min(used + from_plan, max(allowance, 0))
+    user.bonus_processing_seconds = max(bonus - from_bonus, 0)
 
     reservation.status = RESERVATION_FINALIZED
     reservation.resolved_at = now
     db.commit()
+
+    logger.info(
+        "Charged %s reserved seconds for user_id=%s (%s from plan, %s from credit)",
+        reservation.reserved_seconds,
+        user.id,
+        from_plan,
+        from_bonus,
+    )
 
     return reservation.reserved_seconds
 
@@ -391,6 +471,10 @@ class UsageSnapshot:
     monthly_processing_allowance_seconds: int
     processing_used_seconds: int
     processing_reserved_seconds: int
+    #: Administrative credit, an addition to the plan allowance.
+    bonus_processing_seconds: int
+    #: Plan allowance + credit - used - held. The single number a customer
+    #: actually has available.
     processing_remaining_seconds: int
 
     usage_period_started_at: datetime
@@ -423,7 +507,8 @@ def build_usage_snapshot(
     allowance = int(user.monthly_processing_allowance_seconds or 0)
     used = int(user.processing_used_seconds or 0)
     held = active_reserved_seconds(db, user.id)
-    remaining = max(allowance - used - held, 0)
+    bonus = max(int(user.bonus_processing_seconds or 0), 0)
+    remaining = available_seconds(allowance, used, bonus, held)
 
     return UsageSnapshot(
         plan=user.plan,
@@ -433,6 +518,7 @@ def build_usage_snapshot(
         monthly_processing_allowance_seconds=allowance,
         processing_used_seconds=used,
         processing_reserved_seconds=held,
+        bonus_processing_seconds=bonus,
         processing_remaining_seconds=remaining,
         usage_period_started_at=_as_utc(user.usage_period_started_at),
         usage_period_ends_at=_as_utc(user.usage_period_ends_at),
