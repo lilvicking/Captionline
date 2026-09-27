@@ -7,9 +7,16 @@ import {
   fetchAdminSummary,
   fetchAudit,
   fetchCustomer,
+  fetchCustomerOptions,
   searchCustomers,
 } from "../lib/admin";
-import type { AdminAuditEntry, AdminSummary, AdminUserDetail, AdminUserSummary } from "../lib/admin";
+import type {
+  AdminAuditEntry,
+  AdminSummary,
+  AdminUserDetail,
+  AdminUserSummary,
+  CustomerOption,
+} from "../lib/admin";
 
 /** Friendly credit amounts. Stored server side as seconds regardless. */
 const CREDIT_PRESETS = [10, 30, 60, 120];
@@ -37,6 +44,11 @@ export function AdminPage() {
   const { status } = useAuth();
 
   const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
+  const [optionsTruncated, setOptionsTruncated] = useState(false);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | "">("");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<AdminUserSummary[]>([]);
   const [searching, setSearching] = useState(false);
@@ -66,6 +78,52 @@ export function AdminPage() {
       void loadSummary();
     }
   }, [status, loadSummary]);
+
+  // Load the picker once. Fetched from the server, never bundled, and
+  // admin-only, so this is the only place customer addresses are read.
+  useEffect(() => {
+    if (status !== "authenticated") {
+      return;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+
+    const load = async () => {
+      setOptionsLoading(true);
+      setOptionsError(null);
+
+      try {
+        const result = await fetchCustomerOptions(controller.signal);
+        if (cancelled) {
+          return;
+        }
+        setCustomerOptions(result.options);
+        setOptionsTruncated(result.truncated);
+      } catch (error) {
+        if (cancelled || (error instanceof DOMException && error.name === "AbortError")) {
+          return;
+        }
+        setCustomerOptions([]);
+        setOptionsError(
+          error instanceof Error
+            ? error.message
+            : "Could not load the customer list. Use search instead.",
+        );
+      } finally {
+        if (!cancelled) {
+          setOptionsLoading(false);
+        }
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [status]);
 
   const loadAudit = useCallback(async (id: number) => {
     try {
@@ -115,6 +173,17 @@ export function AdminPage() {
     } finally {
       setLoadingDetail(false);
     }
+  };
+
+  /** Choosing from the picker loads the customer straight away. */
+  const handlePick = (value: string) => {
+    if (value === "") {
+      setSelectedId("");
+      return;
+    }
+
+    setSelectedId(Number(value));
+    void handleSelect(Number(value));
   };
 
   const handleGrant = async () => {
@@ -220,6 +289,46 @@ export function AdminPage() {
           </div>
         </div>
       ) : null}
+
+      <div className="admin__search-block">
+        <label className="ctl__label" htmlFor="admin-customer">
+          Customer account
+        </label>
+        <select
+          id="admin-customer"
+          className="admin__input admin__select"
+          value={selectedId}
+          onChange={(event) => handlePick(event.target.value)}
+          disabled={optionsLoading || customerOptions.length === 0}
+        >
+          <option value="">
+            {optionsLoading
+              ? "Loading customers..."
+              : customerOptions.length === 0
+                ? "No customer accounts"
+                : "Select customer..."}
+          </option>
+          {customerOptions.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.email}
+            </option>
+          ))}
+        </select>
+
+        {optionsError ? (
+          <p className="admin__message admin__message--error" role="alert">
+            <AlertCircle size={15} aria-hidden="true" />
+            <span>{optionsError} Use search below instead.</span>
+          </p>
+        ) : null}
+
+        {optionsTruncated ? (
+          <p className="admin__text admin__muted">
+            Showing the first {customerOptions.length} accounts. Use search below to reach anyone
+            further down the list.
+          </p>
+        ) : null}
+      </div>
 
       <form className="admin__search" onSubmit={(event) => void handleSearch(event)}>
         <label className="ctl__label" htmlFor="admin-search">

@@ -72,6 +72,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${getToken()}`,
+        // Customer addresses must never be held in a shared cache.
+        cache: "no-store",
         ...(init.headers ?? {}),
       },
     });
@@ -97,8 +99,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
+export type CustomerOption = {
+  id: number;
+  email: string;
+};
+
+export type CustomerOptionsResult = {
+  options: CustomerOption[];
+  /** True when the server cap was hit; fall back to search. */
+  truncated: boolean;
+  limit: number;
+};
+
 export function fetchAdminSummary(): Promise<AdminSummary> {
   return request<AdminSummary>("/api/admin/summary");
+}
+
+/** Every account's id and email, for the customer picker. Admin-only. */
+export function fetchCustomerOptions(
+  signal?: AbortSignal,
+): Promise<CustomerOptionsResult> {
+  return request<CustomerOptionsResult>("/api/admin/customer-options", { signal });
 }
 
 export function searchCustomers(query: string): Promise<AdminUserSummary[]> {

@@ -245,6 +245,13 @@ never touches usage accounting.
 Requires an administrator. Returns account counts for orientation: total, Free, paid, accounts
 holding credit, and total outstanding credit seconds.
 
+### `GET /api/admin/customer-options`
+
+Requires an administrator. Returns `{options: [{id, email}], truncated, limit}` — only the two
+fields a picker needs, so no plan, usage, entitlement, or billing data is exposed by a list endpoint.
+Sorted case-insensitively, capped at 500, with `truncated: true` when the cap is reached so the UI
+can fall back to search. Marked `Cache-Control: no-store`.
+
 ### `GET /api/admin/users?q=<email or id>`
 
 Requires an administrator. Server-side search over email, or by numeric id, capped at 25 results, so

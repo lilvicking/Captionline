@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session as OrmSession
@@ -48,6 +48,11 @@ MAX_ADJUSTMENT_SECONDS = 86_400
 
 #: Cap on search results, so a broad query cannot pull the customer table.
 SEARCH_LIMIT = 25
+
+#: Cap on the customer picker. Captionline's customer base is small, so a plain
+#: list is fine, but the cap keeps the response bounded and `truncated` tells the
+#: console to fall back to search once the list is no longer complete.
+CUSTOMER_OPTION_LIMIT = 500
 
 REASON_REQUIRED = "A reason is required for every adjustment."
 REASON_TOO_LONG = "Please keep the reason under 280 characters."
@@ -145,6 +150,25 @@ class AdminSummaryResponse(BaseModel):
     total_bonus_seconds: int
 
 
+class CustomerOption(BaseModel):
+    """The minimum needed to populate a picker.
+
+    Deliberately only an id and an email. No plan, usage, entitlement, or billing
+    data: those belong in the detail endpoint, which is fetched once a customer has
+    actually been chosen.
+    """
+
+    id: int
+    email: str
+
+
+class CustomerOptionsResponse(BaseModel):
+    options: list[CustomerOption]
+    #: True when the cap was reached, so the UI can point at search instead.
+    truncated: bool
+    limit: int
+
+
 # --- Helpers ----------------------------------------------------------------
 
 
@@ -219,6 +243,47 @@ def admin_summary(
         paid_users=total - free,
         users_with_credit=with_credit,
         total_bonus_seconds=int(total_bonus),
+    )
+
+
+@router.get("/customer-options", response_model=CustomerOptionsResponse)
+def customer_options(
+    response: Response,
+    admin: User = Depends(require_admin),
+    db: OrmSession = Depends(get_db),
+) -> CustomerOptionsResponse:
+    """Every account's id and email, for the console's customer picker.
+
+    Admin-only, because it enumerates addresses. The search endpoint cannot serve
+    this: it requires a query term, matches loosely, and is capped for a different
+    purpose.
+
+    Two limits keep this safe as the customer base grows. The list is capped, and
+    when the cap is reached `truncated` is true so the UI can fall back to search
+    rather than pretending the list is complete.
+    """
+    del admin
+
+    # Ordering is case-insensitive so the list reads alphabetically the way the
+    # admin expects. Emails are unique in the schema, so no de-duplication is
+    # needed, and deleted accounts no longer exist as rows at all.
+    rows = db.execute(
+        select(User.id, User.email)
+        .order_by(func.lower(User.email).asc(), User.id.asc())
+        .limit(CUSTOMER_OPTION_LIMIT + 1)
+    ).all()
+
+    truncated = len(rows) > CUSTOMER_OPTION_LIMIT
+    options = [
+        CustomerOption(id=user_id, email=email)
+        for user_id, email in rows[:CUSTOMER_OPTION_LIMIT]
+    ]
+
+    # Customer addresses must never sit in a shared cache.
+    response.headers["Cache-Control"] = "no-store"
+
+    return CustomerOptionsResponse(
+        options=options, truncated=truncated, limit=CUSTOMER_OPTION_LIMIT
     )
 
 

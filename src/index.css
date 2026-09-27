@@ -1542,6 +1542,22 @@ textarea {
   gap: 6px;
 }
 
+.admin__search-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+}
+
+.admin__select {
+  width: 100%;
+  min-width: 0;
+  appearance: auto;
+}
+
 .admin__search-row {
   display: flex;
   gap: 8px;

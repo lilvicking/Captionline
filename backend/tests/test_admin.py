@@ -62,11 +62,214 @@ def test_admin_endpoints_exist():
     paths = {route.path for route in admin_router.routes}
     assert paths == {
         "/api/admin/summary",
+        "/api/admin/customer-options",
         "/api/admin/users",
         "/api/admin/users/{user_id}",
         "/api/admin/users/{user_id}/credits",
         "/api/admin/users/{user_id}/audit",
     }
+
+
+# --- Customer picker options ------------------------------------------------
+
+
+def test_admin_can_retrieve_customer_options(client):
+    token = make_admin(client)
+    client.post("/api/auth/register", json={"email": "pick@example.com", "password": PASSWORD})
+
+    response = client.get("/api/admin/customer-options", headers=auth_header(token))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["truncated"] is False
+    assert body["limit"] == 500
+    assert {option["email"] for option in body["options"]} >= {
+        ADMIN_EMAIL,
+        "pick@example.com",
+    }
+
+
+def test_customer_options_are_admin_only_anonymous(client):
+    """401 before anything is read, so the endpoint cannot be used to probe."""
+    assert client.get("/api/admin/customer-options").status_code == 401
+
+
+def test_customer_options_are_admin_only_normal_user(client):
+    token = client.post(
+        "/api/auth/register", json={"email": FREE_EMAIL, "password": PASSWORD}
+    ).json()["access_token"]
+
+    assert client.get(
+        "/api/admin/customer-options", headers=auth_header(token)
+    ).status_code == 403
+
+
+def test_customer_options_reject_a_paid_user_too(client, db_session):
+    """Being on a paid plan must not unlock the picker."""
+    from app.plans import CREATOR_MONTHLY
+    from app.usage import apply_plan_to_user
+
+    token = client.post(
+        "/api/auth/register", json={"email": "paid-picker@example.com", "password": PASSWORD}
+    ).json()["access_token"]
+
+    user = db_session.execute(
+        select(User).where(User.email == "paid-picker@example.com")
+    ).scalar_one()
+    apply_plan_to_user(user, CREATOR_MONTHLY.id)
+    db_session.commit()
+
+    assert user.is_admin is False
+    assert client.get(
+        "/api/admin/customer-options", headers=auth_header(token)
+    ).status_code == 403
+
+
+def test_customer_options_are_sorted_case_insensitively(client, db_session):
+    from app.db.session import get_session_factory
+    from app.usage import add_months, period_start_for
+    from datetime import datetime, timezone
+
+    token = make_admin(client)
+
+    factory = get_session_factory()
+    session = factory()
+    try:
+        for email in ("Zebra@example.com", "apple@example.com", "Mango@example.com"):
+            start = period_start_for(datetime(2026, 9, 26, tzinfo=timezone.utc), "free")
+            session.add(
+                User(
+                    email=email,
+                    password_hash="x",
+                    plan="free",
+                    monthly_processing_allowance_seconds=600,
+                    usage_period_started_at=start,
+                    usage_period_ends_at=add_months(start, 1),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    emails = [
+        option["email"]
+        for option in client.get(
+            "/api/admin/customer-options", headers=auth_header(token)
+        ).json()["options"]
+    ]
+
+    # Case-insensitive alphabetical, and the test addresses interleave correctly.
+    lowered = [value.lower() for value in emails]
+    assert lowered == sorted(lowered)
+    assert lowered.index("apple@example.com") < lowered.index("mango@example.com")
+    assert lowered.index("mango@example.com") < lowered.index("zebra@example.com")
+
+
+def test_customer_options_have_no_duplicates(client, db_session):
+    token = make_admin(client)
+    for index in range(5):
+        client.post(
+            "/api/auth/register",
+            json={"email": f"dup{index}@example.com", "password": PASSWORD},
+        )
+
+    options = client.get(
+        "/api/admin/customer-options", headers=auth_header(token)
+    ).json()["options"]
+
+    ids = [option["id"] for option in options]
+    emails = [option["email"] for option in options]
+
+    assert len(ids) == len(set(ids))
+    assert len(emails) == len(set(emails))
+
+
+def test_customer_options_return_only_id_and_email(client):
+    """A picker needs an id and an address, and nothing more."""
+    token = make_admin(client)
+
+    options = client.get(
+        "/api/admin/customer-options", headers=auth_header(token)
+    ).json()["options"]
+
+    assert options
+    for option in options:
+        assert set(option) == {"id", "email"}
+
+    # And none of the values leak a credential.
+    serialised = str(options)
+    for forbidden in ("password", "token", "stripe", "bonus", "usage", "allowance"):
+        assert forbidden not in serialised.lower()
+
+
+def test_customer_options_are_not_cacheable(client):
+    """Customer addresses must not sit in a shared cache."""
+    token = make_admin(client)
+
+    response = client.get("/api/admin/customer-options", headers=auth_header(token))
+
+    assert response.headers.get("cache-control") == "no-store"
+
+
+def test_customer_options_exclude_deleted_accounts(client):
+    """A deleted account is no longer a row, so it cannot appear."""
+    admin_token = make_admin(client)
+    victim_token = client.post(
+        "/api/auth/register", json={"email": "gone@example.com", "password": PASSWORD}
+    ).json()["access_token"]
+
+    deleted = client.post(
+        "/api/account/delete",
+        json={"current_password": PASSWORD, "confirmation": "DELETE"},
+        headers=auth_header(victim_token),
+    )
+    assert deleted.status_code == 200
+
+    emails = [
+        option["email"]
+        for option in client.get(
+            "/api/admin/customer-options", headers=auth_header(admin_token)
+        ).json()["options"]
+    ]
+
+    assert "gone@example.com" not in emails
+    assert ADMIN_EMAIL in emails  # the admin is still listed, as an ordinary account
+
+
+def test_customer_options_are_capped_and_flagged(client, db_session, monkeypatch):
+    from app.routers import admin as admin_module
+    from app.db.session import get_session_factory
+    from app.usage import add_months, period_start_for
+    from datetime import datetime, timezone
+
+    token = make_admin(client)
+
+    monkeypatch.setattr(admin_module, "CUSTOMER_OPTION_LIMIT", 3)
+
+    factory = get_session_factory()
+    session = factory()
+    try:
+        for index in range(6):
+            start = period_start_for(datetime(2026, 9, 26, tzinfo=timezone.utc), "free")
+            session.add(
+                User(
+                    email=f"cap{index:02d}@example.com",
+                    password_hash="x",
+                    plan="free",
+                    monthly_processing_allowance_seconds=600,
+                    usage_period_started_at=start,
+                    usage_period_ends_at=add_months(start, 1),
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    body = client.get("/api/admin/customer-options", headers=auth_header(token)).json()
+
+    assert len(body["options"]) == 3
+    assert body["truncated"] is True
+    assert body["limit"] == 3
 
 
 @pytest.mark.parametrize(
@@ -102,6 +305,7 @@ def test_normal_user_is_denied(client, db_session):
 
     for method, path, body in [
         ("GET", "/api/admin/summary", None),
+        ("GET", "/api/admin/customer-options", None),
         ("GET", "/api/admin/users?q=customer", None),
         ("GET", "/api/admin/users/1", None),
         ("GET", "/api/admin/users/1/audit", None),
