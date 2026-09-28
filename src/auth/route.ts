@@ -27,9 +27,13 @@ export const CAPTION_GENERATOR_PATH = "/caption-generator";
  */
 export const PRICING_PATH = "/pricing";
 /**
- * The support console. Deliberately absent from customer navigation: the entry
- * point is a small link inside the Account sheet, shown only to accounts the
- * server reports as administrators.
+ * The support console. It has no entry point anywhere in the customer
+ * interface: not in the navigation, not in the footer, and not in the Account
+ * sheet. An administrator reaches it by typing this path directly.
+ *
+ * The route still renders for anyone who arrives at it; every admin endpoint
+ * independently requires administrator status, so the console is empty of
+ * anything useful unless the server agrees the caller is an administrator.
  */
 export const ADMIN_PATH = "/admin";
 

@@ -6,7 +6,6 @@ import {
   LogOut,
   Mail,
   RefreshCw,
-  ShieldCheck,
   Trash2,
   TriangleAlert,
   User as UserIcon,
@@ -14,7 +13,6 @@ import {
 } from "lucide-react";
 import { isUnauthorized, useAuth } from "./AuthContext";
 import { ForgotPasswordForm } from "./ForgotPasswordForm";
-import { ADMIN_PATH, navigateTo } from "./route";
 import { changePassword, deleteAccount, getStoredToken } from "../lib/auth";
 import { openBillingPortal } from "../lib/billing";
 
@@ -420,24 +418,16 @@ export function AccountPanel({ onClose }: AccountPanelProps) {
           ) : null}
 
           {/*
-            The support console is intentionally not in the main navigation. It
-            appears here only for accounts the server reports as administrators,
-            and every admin endpoint enforces that independently, so hiding the
-            link is presentation only.
+            The support console is reached by typing /admin directly. There is
+            deliberately no link, button, or other on-screen entry point to it
+            here, in the navigation, or in the footer: an administrator already
+            knows the URL, and no customer should be shown the way in.
+
+            This is presentation only and is not the security boundary. Every
+            admin endpoint enforces administrator status server side, so a
+            non-administrator who reaches /admin by any means gets nothing but
+            a failed request.
           */}
-          {account?.is_admin ? (
-            <button
-              className="button button--ghost button--block"
-              type="button"
-              onClick={() => {
-                onClose();
-                navigateTo(ADMIN_PATH);
-              }}
-            >
-              <ShieldCheck size={15} aria-hidden="true" />
-              Admin
-            </button>
-          ) : null}
 
           <button
             className="button button--ghost button--block"
