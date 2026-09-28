@@ -5,7 +5,8 @@
  * otherwise see the same generic tags on every URL. This script writes a real
  * HTML file per public route into the build output, with that route's own
  * title, description, canonical, robots, Open Graph and Twitter tags already in
- * the markup.
+ * the markup, plus the JSON-LD structured data a crawler reads to understand
+ * what the product is and what it costs.
  *
  * It is deliberately small. There are six pages, the metadata already exists in
  * one JSON file, and nothing here needs a browser, a DOM, or a framework:
@@ -52,7 +53,84 @@ function text(value) {
     .replace(/>/g, "&gt;");
 }
 
-function headTags({ title, description, routePath, ogImage }) {
+/**
+ * A JSON-LD block.
+ *
+ * Any `<` inside a string is replaced with its JSON escape before the block is
+ * written, so a `</script>` sequence cannot close the tag early. The escape is
+ * legal JSON, so the parsed value is unchanged.
+ */
+function jsonLd(block) {
+  return `    <script type="application/ld+json" data-seo="jsonld">${JSON.stringify(block).replace(
+    /</g,
+    "\\u003c",
+  )}</script>`;
+}
+
+/**
+ * The same documents the React app builds at runtime, assembled from
+ * `src/seo/content.json` so a price, an allowance or an FAQ answer has exactly
+ * one source of truth.
+ *
+ * Only the two routes that describe the product emit anything, matching the app
+ * exactly. A prerendered block the runtime would immediately strip would leave
+ * the two views of the page disagreeing.
+ *
+ * These carry the `data-seo="jsonld"` attribute the client uses to clear stale
+ * blocks, so a browser that does run the script replaces these rather than
+ * adding a second copy alongside them.
+ */
+function structuredDataFor(routePath, facts) {
+  if (routePath !== "/" && routePath !== "/caption-generator") {
+    return [];
+  }
+
+  const softwareApplication = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: SITE_NAME,
+    url: routePath === "/" ? `${SITE_URL}/` : `${SITE_URL}${routePath}`,
+    applicationCategory: "MultimediaApplication",
+    operatingSystem: "Web browser",
+    description: facts.mediumDescription,
+    featureList: [...facts.capabilities],
+    offers: facts.plans.map((plan) => ({
+      "@type": "Offer",
+      name: `${plan.name} plan`,
+      price: String(plan.price),
+      priceCurrency: "USD",
+      description: `${plan.minutes} processing minutes per ${
+        plan.period === "year" ? "year" : "month"
+      }.`,
+    })),
+  };
+
+  const webSite = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: SITE_NAME,
+    url: SITE_URL,
+    description: facts.shortDescription,
+  };
+
+  const blocks = [softwareApplication, webSite];
+
+  if (routePath === "/caption-generator") {
+    blocks.push({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: facts.faq.map((entry) => ({
+        "@type": "Question",
+        name: entry.question,
+        acceptedAnswer: { "@type": "Answer", text: entry.answer },
+      })),
+    });
+  }
+
+  return blocks;
+}
+
+function headTags({ title, description, routePath, ogImage, facts }) {
   const url = routePath === "/" ? `${SITE_URL}/` : `${SITE_URL}${routePath.replace(/\/+$/, "")}`;
   const fullTitle = routePath === "/" ? title : `${title} | ${SITE_NAME}`;
   const image = `${SITE_URL}${ogImage}`;
@@ -76,6 +154,7 @@ function headTags({ title, description, routePath, ogImage }) {
     `    <meta name="twitter:description" content="${attr(description)}" />`,
     `    <meta name="twitter:image" content="${attr(image)}" />`,
     `    <meta name="twitter:image:alt" content="${attr(OG_IMAGE_ALT)}" />`,
+    structuredDataFor(routePath, facts).map(jsonLd).join("\n    "),
   ].join("\n    ");
 }
 
@@ -86,7 +165,7 @@ function headTags({ title, description, routePath, ogImage }) {
  * replaces it on mount, so there is exactly one rendered version for people and
  * no chance of the two drifting in a way a reader could see.
  */
-function captionGeneratorBody() {
+function captionGeneratorBody(facts) {
   const workflow = [
     ["Upload your video", "Choose a file from your device. Captionline measures it and transcribes the audio with word-level timing, so captions can be placed against the words actually spoken."],
     ["Review and edit the captions", "Correct the words and punctuation, adjust the timing, and add anything the automatic pass missed. The export uses the captions you leave here."],
@@ -161,12 +240,23 @@ ${useCases.map((u) => `            <li>${text(u)}</li>`).join("\n")}
           more video processed each month: 500 minutes on Creator, 1,500 on Pro.</p>
           <p class="seopage__body"><a href="/pricing">See all plans and monthly allowances</a>.</p>
         </section>
+        <section class="seopage__section" id="seopage-faq">
+          <h2 class="seopage__subtitle">Questions people ask about automatic captions</h2>
+          <dl>
+${facts.faq
+  .map(
+    (entry) =>
+      `            <dt>${text(entry.question)}</dt>\n            <dd>${text(entry.answer)}</dd>`,
+  )
+  .join("\n")}
+          </dl>
+        </section>
       </div>`;
 }
 
-function bodyFor(routePath) {
+function bodyFor(routePath, facts) {
   if (routePath === "/caption-generator") {
-    return captionGeneratorBody();
+    return captionGeneratorBody(facts);
   }
   return "      <p>Loading…</p>";
 }
@@ -221,6 +311,9 @@ async function main() {
   const shared = JSON.parse(
     await readFile(path.join(ROOT, "src", "seo", "routes.json"), "utf8"),
   );
+  const facts = JSON.parse(
+    await readFile(path.join(ROOT, "src", "seo", "content.json"), "utf8"),
+  );
   const template = await readFile(path.join(DIST, "index.html"), "utf8");
 
   const routes = Object.keys(shared.routes);
@@ -233,6 +326,7 @@ async function main() {
       description: meta.description,
       routePath,
       ogImage: shared.ogImage,
+      facts,
     });
 
     // Replace the placeholder title block with this route's head tags, and drop
@@ -244,7 +338,7 @@ async function main() {
 
     // The starter document ships a minimal root; replace it with the route's
     // static body so a crawler sees real content without running JavaScript.
-    html = replaceRoot(html, bodyFor(routePath));
+    html = replaceRoot(html, bodyFor(routePath, facts));
 
     // Starter head tags are replaced wholesale by the block above.
     html = html.replace(

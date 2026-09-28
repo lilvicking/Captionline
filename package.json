@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build && node scripts/prerender.mjs",
     "start": "node scripts/serve-dist.mjs",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "indexnow": "node scripts/indexnow.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.453.0",

@@ -15,78 +15,11 @@ import {
 } from "lucide-react";
 import { usePageMeta } from "../seo/meta";
 import {
+  FAQ,
   faqPageSchema,
   softwareApplicationSchema,
   webSiteSchema,
 } from "../seo/structuredData";
-
-/**
- * The FAQ is written once and used twice: the visible list renders these
- * strings, and the FAQPage structured data is built from the same array, so the
- * machine-readable answers always match what a reader can actually see.
- */
-const FAQ = [
-  {
-    question: "What is an AI caption generator?",
-    answer:
-      "An AI caption generator listens to the audio in a video, turns the speech into timed text, and places that text on screen in step with the video. Captionline does this automatically when you upload a file, and gives you an editor afterwards so you can correct anything the automatic pass got wrong.",
-  },
-  {
-    question: "How do I automatically add captions to a video?",
-    answer:
-      "Upload your video to Captionline and it is transcribed with word-level timing, so each caption appears when the matching words are spoken. You can then edit the text, adjust the timing, and choose how the captions look before exporting.",
-  },
-  {
-    question: "Can I edit automatically generated captions?",
-    answer:
-      "Yes. Every generated caption is editable. You can change the words and punctuation, move a caption's start and end time, add captions that were missed, and remove ones you do not want. Exports use the captions as you left them, not the original automatic pass.",
-  },
-  {
-    question: "Can I change caption font, size, colour and position?",
-    answer:
-      "Yes. The caption designer controls font family, size, weight, colour, alignment, uppercase, letter spacing, word spacing, line height, background colour and opacity, outline and shadow, and vertical position from a precise slider. You can start from a preset and then adjust anything.",
-  },
-  {
-    question: "Can I download captions as an SRT file?",
-    answer:
-      "Yes. Captionline generates a standard SRT subtitle file from your caption track, which you can download directly. SRT is the format most video players and platforms accept, so it works as a standalone subtitle file as well as a starting point for styling.",
-  },
-  {
-    question: "Can I export a video with captions already added?",
-    answer:
-      "Yes. Captionline renders a finished MP4 with your captions burned into the video, ready to upload or share. This is included on every plan, including the free one.",
-  },
-  {
-    question: "What are burned-in or hardcoded captions?",
-    answer:
-      "Burned-in captions, also called hardcoded captions, are drawn into the video picture itself rather than stored as a separate subtitle track. They cannot be turned off by a viewer, so they always show. Captionline can burn your styled captions into the exported video, and can also give you a separate SRT file when you would rather keep them switchable.",
-  },
-  {
-    question: "Can I use Captionline for TikTok videos?",
-    answer:
-      "Yes. TikTok has no separate subtitle track, so the usual approach is burned-in captions. You can position captions low, out of the way of TikTok's own buttons, and choose a size and outline that stay readable against a busy background.",
-  },
-  {
-    question: "Can I use Captionline for Instagram Reels?",
-    answer:
-      "Yes. You can style captions for the vertical format, control the exact vertical position, and export a captioned MP4 sized the same way as the Reel you uploaded. The SRT file works too if your editing tool supports external subtitle tracks.",
-  },
-  {
-    question: "Can I use Captionline for YouTube Shorts and YouTube videos?",
-    answer:
-      "Yes. For videos where you manage your own caption track, download the SRT file and upload it as a subtitle track. For Shorts, and for anywhere you want captions always visible, export a captioned MP4 instead.",
-  },
-  {
-    question: "Is Captionline free?",
-    answer:
-      "There is a free plan with 10 minutes of video processing a month. It is not a trial and it does not expire, but the monthly processing time is limited. Every feature is included on the free plan: editing, the full caption designer, full preview, SRT download and finished MP4 export. Paid plans raise the monthly processing time to 500 or 1,500 minutes.",
-  },
-  {
-    question: "Do exports use additional processing minutes?",
-    answer:
-      "No. Processing minutes are charged for transcription, which is the expensive step. Exporting, editing and styling do not use any, so you can change the look of your captions and export again as often as you like without affecting your monthly allowance.",
-  },
-] as const;
 
 const WORKFLOW = [
   {

@@ -1,0 +1,41 @@
+# Captionline
+
+> Captionline is an online caption and subtitle workflow: upload a video, generate timed captions automatically, edit and style them, preview the result, then download an SRT file or export a finished captioned video.
+
+## What it does
+
+- Automatic transcription of uploaded video and audio with word-level timing.
+- An editor for the generated caption track, including the words and punctuation.
+- A caption designer for font, size, weight, colour, alignment, spacing, outline, shadow and background.
+- Full-length preview of the captioned video.
+- Subtitle download as an SRT file.
+- Export of a finished captioned video with the captions burned in.
+
+## Pricing
+
+Every plan includes the whole workflow. The difference between plans is how much video can be processed each month.
+
+- Free: $0 per month, 10 processing minutes a month.
+- Creator: $19 per month, 500 processing minutes a month.
+- Pro: $39 per month, 1,500 processing minutes a month.
+- Creator Annual: $149 per year, 500 processing minutes a month.
+
+Processing minutes are charged for transcription. Exporting, editing and styling do not use any, so captions can be restyled and exported again as often as needed without affecting the monthly allowance.
+
+## Frequently asked questions
+
+- [Questions people ask about automatic captions](https://captionline.pro/caption-generator#seopage-faq): what an AI caption generator is, how to add captions automatically, whether captions can be edited and restyled, how SRT download and burned-in export differ, and how much the free plan includes.
+
+## Pages
+
+- [Home](https://captionline.pro/): the captioning workflow itself, where a video is uploaded and exported.
+- [Free AI caption generator for video](https://captionline.pro/caption-generator): how the workflow works, what it can do, and the common questions.
+- [Pricing](https://captionline.pro/pricing): all plans and monthly processing allowances.
+- [Contact and support](https://captionline.pro/contact): support and contact information.
+- [Privacy Policy](https://captionline.pro/privacy): how account, media, transcripts, usage and payment data are handled.
+- [Terms of Service](https://captionline.pro/terms): plans, allowances, ownership of uploaded media, refunds and liability.
+
+## Notes
+
+- Page content is prerendered, so the text above and the structured data embedded in each page are both readable without running JavaScript.
+- Account pages, the support console and password-reset pages are excluded from crawling in robots.txt.

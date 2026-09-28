@@ -8,85 +8,55 @@
  */
 
 import { SITE_NAME, SITE_URL, absoluteUrl } from "./site";
+import content from "./content.json";
+
+/**
+ * The facts below live in `content.json` rather than in this file, because the
+ * same claims are also published to `llms.txt` and to the prerendered HTML. One
+ * copy of a price, an allowance, or a FAQ answer is the only way to be sure the
+ * page, the JSON-LD and the crawler-facing text cannot contradict each other.
+ */
+const facts = content as {
+  tagline: string;
+  shortDescription: string;
+  mediumDescription: string;
+  longDescription: string;
+  freePlanSummary: string;
+  capabilities: string[];
+  categories: string[];
+  tags: string[];
+  plans: { id: string; name: string; price: number; period: string; minutes: number }[];
+  faq: { question: string; answer: string }[];
+};
 
 /** The plans, as they actually are. Used for both visible copy and offers. */
-export const PLANS = [
-  {
-    id: "free",
-    name: "Free",
-    price: 0,
-    period: "month",
-    minutes: 10,
-  },
-  {
-    id: "creator",
-    name: "Creator",
-    price: 19,
-    period: "month",
-    minutes: 500,
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    price: 39,
-    period: "month",
-    minutes: 1500,
-  },
-  {
-    id: "creator-annual",
-    name: "Creator Annual",
-    price: 149,
-    period: "year",
-    minutes: 500,
-  },
-] as const;
+export const PLANS = facts.plans;
 
-export const FREE_PLAN_SUMMARY =
-  "10 processing minutes a month, with caption editing, the full Caption Designer, full preview, SRT download and finished MP4 export included.";
+/** The free plan's headline terms, as stated on the pricing page. */
+export const FREE_PLAN_SUMMARY = facts.freePlanSummary;
 
 /** Capabilities stated once, so the page and the structured data agree. */
-export const CAPABILITIES = [
-  "Automatic transcription of uploaded video and audio with word-level timing",
-  "An editor for the generated caption track, including the words and punctuation",
-  "A caption designer for font, size, weight, colour, alignment, spacing, outline, shadow and background",
-  "Full-length preview of the captioned video",
-  "Subtitle download as an SRT file",
-  "Export of a finished captioned video with the captions burned in",
-] as const;
+export const CAPABILITIES = facts.capabilities;
 
-export const SHORT_DESCRIPTION =
-  "Automatic video captions and subtitles you can edit, style and export as SRT or a finished captioned MP4.";
+export const SHORT_DESCRIPTION = facts.shortDescription;
 
-export const MEDIUM_DESCRIPTION =
-  "Captionline is an online caption and subtitle workflow: upload a video, generate timed captions automatically, edit and style them, preview the result, then download an SRT file or export a finished captioned video.";
+export const MEDIUM_DESCRIPTION = facts.mediumDescription;
 
-export const LONG_DESCRIPTION =
-  "Captionline turns an uploaded video into an editable, stylable caption track. Upload a video, and Captionline transcribes the audio with word-level timing; edit the words and punctuation in the caption editor; choose a look in the caption designer, from font and size to colour, alignment, spacing, outline, shadow and background; preview the full captioned video; then download a standard SRT subtitle file or export a finished MP4 with the captions burned in. Every plan includes the whole workflow. The difference between plans is how much video can be processed each month: the free plan includes 10 processing minutes a month, and paid plans raise that to 500 or 1,500 minutes.";
+export const LONG_DESCRIPTION = facts.longDescription;
 
 /** Short, directory-friendly tagline. */
-export const TAGLINE = "Automatic video captions, styled and exported";
+export const TAGLINE = facts.tagline;
 
-export const CATEGORIES = [
-  "Video editing",
-  "Subtitles & captions",
-  "Transcription",
-  "Content creation",
-  "Social media video",
-  "Accessibility",
-];
+export const CATEGORIES = facts.categories;
 
-export const TAGS = [
-  "AI caption generator",
-  "automatic subtitles",
-  "video to text",
-  "SRT generator",
-  "burn in captions",
-  "closed captions",
-  "video transcription",
-  "caption editor",
-  "subtitle editor",
-  "caption styling",
-];
+export const TAGS = facts.tags;
+
+/**
+ * The FAQ, written once and used twice: the visible list renders these strings,
+ * and the FAQPage structured data is built from the same array, so the
+ * machine-readable answers always match what a reader can actually see.
+ */
+export const FAQ = facts.faq;
 
 /**
  * The application, described only in terms of what it does.

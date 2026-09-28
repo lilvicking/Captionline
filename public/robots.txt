@@ -7,4 +7,19 @@ Disallow: /admin
 Disallow: /reset-password
 Disallow: /forgot-password
 
+# One directive covers every user-agent below, so it is stated once and not
+# repeated per group.
 Sitemap: https://captionline.pro/sitemap.xml
+
+# OpenAI's search crawler is allowed to read the public pages so Captionline can
+# appear in ChatGPT search results. Whether Captionline is used for training is a
+# separate decision and is not expressed here.
+#
+# Only this group's rules apply to this crawler, so the disallows above are
+# repeated here: without them, naming OAI-SearchBot would hand it the private and
+# single-use pages the wildcard group withholds.
+User-agent: OAI-SearchBot
+Allow: /
+Disallow: /admin
+Disallow: /reset-password
+Disallow: /forgot-password
